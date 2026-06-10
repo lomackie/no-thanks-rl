@@ -113,3 +113,30 @@ def test_train_saves_loadable_net(tmp_path, capsys):
 
     loaded = ValueNet.load(out_path)
     assert loaded.in_dim == info_feature_dim(loaded.n_players)
+
+
+def test_format_cards_groups_runs():
+    from nothanks.cli import format_cards
+
+    assert format_cards(frozenset()) == "-"
+    assert format_cards({3, 4, 5, 22}) == "3-5,22"
+    assert format_cards({7}) == "7"
+    assert format_cards({3, 5, 6, 9}) == "3,5-6,9"
+
+
+def test_play_scripted_game_reaches_the_end(monkeypatch, capsys):
+    # The human takes every card: taking retains the turn, so the game runs to
+    # completion in 24 prompts regardless of what the AI would do. Tiny search
+    # budget (heuristic-playout leaf) keeps this fast.
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "t")
+    main(["play", "--net", "", "--n-iter", "8", "--seed", "0"])
+    out = capsys.readouterr().out
+    assert "you are P0" in out
+    assert "game over" in out
+    assert "winner" in out
+
+
+def test_play_quits_cleanly(monkeypatch, capsys):
+    monkeypatch.setattr("builtins.input", lambda _prompt="": "q")
+    main(["play", "--net", "", "--n-iter", "8", "--seed", "0"])
+    assert "quit." in capsys.readouterr().out

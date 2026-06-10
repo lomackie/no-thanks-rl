@@ -22,8 +22,18 @@ with ``--net``), ``net`` (one-ply lookahead on a trained info net, instant), and
 ``pimc`` (determinized Monte-Carlo rollouts; the strategy-fusion-prone baseline,
 kept for comparison).
 
+When methods disagree: trust ``ismcts`` by default (it is by far the strongest
+player in fair bot-vs-bot grading), but on close take/pass calls over an
+isolated or gapped high card with a decent pot, treat net-based EVs with
+caution — the trained net systematically overprices those takes, and the search
+inherits the bias when the take arm is visit-starved (read the visit counts).
+``pimc``'s EVs are the *rollout policy's*, biased toward heuristic play. See
+CLAUDE.md roadmap step 12 for the adjudication behind this.
+
 ``train`` trains the honest info-set net (:func:`nothanks.beliefnet.train_info`)
-and saves it: train once, analyse many times.
+and saves it: train once, analyse many times. ``play`` is an interactive
+terminal game against :class:`~nothanks.ismcts.ISMCTSBot` (the browser version
+is ``python -m nothanks.web``).
 """
 
 from __future__ import annotations
@@ -197,6 +207,97 @@ def cmd_train(args) -> None:
               f"win/tie {res['win_rate']:.1%} (parity {res['parity']:.0%})")
 
 
+def format_cards(cards) -> str:
+    """Compact run display: ``{3,4,5,22}`` → ``"3-5,22"``; empty → ``"-"``."""
+    if not cards:
+        return "-"
+    out: list[str] = []
+    run: list[int] = []
+    for c in sorted(cards):
+        if run and c == run[-1] + 1:
+            run.append(c)
+            continue
+        if run:
+            out.append(str(run[0]) if len(run) == 1 else f"{run[0]}-{run[-1]}")
+        run = [c]
+    out.append(str(run[0]) if len(run) == 1 else f"{run[0]}-{run[-1]}")
+    return ",".join(out)
+
+
+def _print_board(s, human: int) -> None:
+    print(f"\ncard {s.active} face-up, pot {s.pot} — {len(s.remaining)} cards left in pile")
+    for q in range(s.n_players):
+        who = f"you (P{q})" if q == human else f"P{q}"
+        print(f"  {who:9s} chips {s.chips[q]:2d}   cards {format_cards(s.cards[q])}")
+
+
+def cmd_play(args) -> None:
+    from .engine import final_scores, is_terminal, new_game, step
+    from .imperfect import info_from_state
+    from .ismcts import ISMCTSBot, make_value_leaf
+
+    seed = args.seed if args.seed is not None else random.randrange(1 << 30)
+    rng = random.Random(seed)
+    n = args.n_players
+    human = args.seat
+    if not 0 <= human < n:
+        raise ValueError(f"--seat must be in 0..{n - 1}")
+
+    leaf = None
+    if args.net:
+        net = _load_info_net(args.net)
+        if net.n_players != n:
+            raise SystemExit(f"net is for {net.n_players} players, game has {n}")
+        leaf = make_value_leaf(net)
+    bots = {q: ISMCTSBot(n_iter=args.n_iter, evaluator=leaf, c=args.c, seed=seed + q)
+            for q in range(n) if q != human}
+
+    print(f"No Thanks — you are P{human} of {n}; {args.n_removed} cards removed "
+          f"(AI: IS-MCTS, {args.n_iter} iters, "
+          f"{'info-net leaf' if leaf else 'heuristic-playout leaf'})")
+    print("lowest score wins: a card costs its face value, runs count their "
+          "lowest card only, each chip is -1")
+
+    s = new_game(n, n_removed=args.n_removed, rng=rng)
+    while not is_terminal(s):
+        if s.to_move == human:
+            _print_board(s, human)
+            if s.chips[human] == 0:
+                print("  no chips — forced take")
+                a = "take"
+            else:
+                while True:
+                    try:
+                        raw = input("  (t)ake or (p)ass? ").strip().lower()
+                    except EOFError:
+                        print("\nquit.")
+                        return
+                    if raw in ("q", "quit"):
+                        print("quit.")
+                        return
+                    if raw in ("t", "take"):
+                        a = "take"
+                        break
+                    if raw in ("p", "pass"):
+                        a = "pass"
+                        break
+                    print("  t / p / q")
+        else:
+            a = bots[s.to_move].act(info_from_state(s, n_removed=args.n_removed))
+            verb = f"takes card {s.active} (+{s.pot} chips)" if a == "take" else "passes"
+            print(f"P{s.to_move} {verb}")
+        s = step(s, a, rng)
+
+    print("\ngame over — final scores (lower is better):")
+    sc = final_scores(s)
+    best = min(sc)
+    for q in range(n):
+        who = f"you (P{q})" if q == human else f"P{q}"
+        mark = "  <- winner" if sc[q] == best else ""
+        print(f"  {who:9s} {sc[q]:4d}   cards {format_cards(s.cards[q])}, "
+              f"chips {s.chips[q]}{mark}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="nothanks", description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -235,6 +336,17 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--grade", type=int, default=500,
                    help="games for the post-train grading run (0 = skip)")
     t.set_defaults(fn=cmd_train)
+
+    g = sub.add_parser("play", help="interactive terminal game vs the IS-MCTS bot")
+    g.add_argument("--n-players", type=int, default=3)
+    g.add_argument("--seat", type=int, default=0, help="your seat (default 0)")
+    g.add_argument("--net", default="models/info_net_3p.npz",
+                   help="info-set net for the search leaf ('' = heuristic playouts)")
+    g.add_argument("--n-iter", type=int, default=400, help="IS-MCTS iterations per move")
+    g.add_argument("--c", type=float, default=30.0, help="IS-MCTS exploration constant")
+    g.add_argument("--n-removed", type=int, default=9)
+    g.add_argument("--seed", type=int, default=None, help="fix the deal (default: random)")
+    g.set_defaults(fn=cmd_play)
     return p
 
 

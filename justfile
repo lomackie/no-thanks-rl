@@ -39,6 +39,14 @@ train-info *args:
 play *args:
     uv run --group web python -m nothanks.web {{args}}
 
+# Play No Thanks against the AI in the terminal (see `just eval --help` for the engine)
+play-cli *args:
+    uv run python -m nothanks.cli play {{args}}
+
+# Distill the bot's policy into human-readable take/pass threshold rules
+distill *args:
+    uv run python -m nothanks.distill {{args}}
+
 # Open a Python REPL with the project importable
 repl:
     uv run python

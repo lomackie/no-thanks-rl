@@ -33,6 +33,9 @@ just demo     # exact-solve a tiny game and print an opening eval
 just mc-demo  # Monte-Carlo eval: tiny-game sanity check + a full opening
 just train    # train a self-play value net, eval an opening, grade it vs heuristic
 just imperfect # hidden removed cards: determinized (PIMC) eval + exploitability
+just play     # play against the bot in a browser (http://localhost:8000)
+just play-cli # play against the bot in the terminal
+just distill  # print the bot's strategy as human-readable threshold rules
 just repl     # python REPL with the project importable
 ```
 
@@ -85,7 +88,34 @@ nothing here can peek at the nine removed cards.
   the belief game, honest one-ply evals, no PIMC wrapper needed.
 - `nothanks/approx_br.py` — approximate best response: learned-exploitability
   lower bounds that scale to the full game.
-- `nothanks/cli.py` — the position-input CLI (`just eval`, `just train-info`).
+- `nothanks/arena.py` — seat-balanced bot-vs-bot matches between the honest bots
+  (the fair grader: no heuristic opponent to overfit to).
+- `nothanks/distill.py` — distills the bot's policy into human-readable take/pass
+  threshold rules with per-context agreement percentages (`just distill`).
+- `nothanks/cli.py` — the position-input CLI (`just eval`, `just train-info`),
+  plus an interactive terminal game vs the bot (`just play-cli`).
+- `nothanks/web.py` — browser game against the IS-MCTS bot (`just play`).
 - `nothanks/demo.py` — prints an engine-style exact evaluation of a tiny opening.
 - `nothanks/mc_demo.py` — Monte-Carlo eval demo (sampler vs. exact on a tiny game).
 - `nothanks/imperfect_demo.py` — determinized (PIMC) eval + exploitability demo.
+
+## Play against it
+
+```sh
+just play      # browser game at http://localhost:8000
+just play-cli  # the same bot in the terminal
+```
+
+The browser game can show live analysis (per-move EV and a projected final
+score for every player), and has an **advisor mode**: relay the moves of a
+real-life game — after a take, enter the card that was actually flipped — and
+the bot recommends your moves as you go.
+
+## The strategy, in one table
+
+`just distill` queries the bot across thousands of self-play decisions and fits
+the rule *take iff `score_delta(card) − pot ≤ T`* (the heuristic's own template;
+`score_delta` is what the card adds to your score given your runs). The bot
+plays roughly that rule with **T ≈ −3** — demand about a 3-chip premium, more
+for big cards (T ≈ −5 for 30–35) — and earns its edge where no threshold rule
+fits: positions where taking extends or bridges one of its runs.

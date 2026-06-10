@@ -337,6 +337,127 @@
   .log-entry .log-pass  { color: #fde68a; }
   .log-entry .log-event { color: #9ca3af; font-style: italic; }
 
+  /* ── Mode tabs ────────────────────────────────────────────── */
+  #mode-tabs { display: flex; gap: 0.5rem; margin-bottom: 1.2rem; }
+
+  .mode-tab {
+    flex: 1;
+    padding: 0.5rem;
+    background: rgba(255,255,255,0.08);
+    color: #d0cfc0;
+    border: 1px solid #666;
+    border-radius: 8px;
+    cursor: pointer;
+    font-family: Georgia, serif;
+    font-size: 0.95rem;
+    text-align: center;
+  }
+
+  .mode-tab.selected {
+    background: var(--gold);
+    color: #1a1200;
+    font-weight: bold;
+    border-color: var(--gold-dark);
+  }
+
+  .setup-hint { font-size: 0.78rem; color: #b8b4a4; margin: -0.4rem 0 0.9rem; line-height: 1.35; }
+
+  /* ── Analysis ─────────────────────────────────────────────── */
+  #analysis-box {
+    display: none;
+    background: rgba(0,0,0,0.3);
+    border-radius: 10px;
+    padding: 0.55rem 0.9rem;
+    margin-bottom: 0.8rem;
+    font-size: 0.88rem;
+    color: #e0ddd0;
+    text-align: center;
+  }
+
+  #analysis-box .suggest { color: var(--gold); font-weight: bold; }
+  #analysis-box .ev-detail { color: #b8b4a4; font-size: 0.8rem; margin-top: 2px; }
+
+  .player-proj {
+    font-size: 0.8rem;
+    color: var(--muted);
+    margin-left: 0.6rem;
+  }
+
+  .player-proj b { color: #444; }
+
+  #undo-btn {
+    display: none;
+    padding: 0.3rem 0.8rem;
+    margin-right: 0.5rem;
+    background: rgba(0,0,0,0.3);
+    color: #e0ddd0;
+    border: 1px solid #888;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-family: Georgia, serif;
+  }
+
+  #undo-btn:hover:not(:disabled) { background: rgba(0,0,0,0.5); }
+  #undo-btn:disabled { opacity: 0.4; cursor: default; }
+
+  /* ── Card picker (advisor: which card was flipped?) ───────── */
+  #card-picker-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 110;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #card-picker-overlay.visible { display: flex; }
+
+  #card-picker-box {
+    background: var(--card-bg);
+    border-radius: 16px;
+    padding: 1.5rem 1.8rem;
+    max-width: 440px;
+    width: 92%;
+    text-align: center;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+
+  #card-picker-box h3 { font-size: 1.05rem; margin-bottom: 1rem; color: var(--text); }
+
+  #picker-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    justify-content: center;
+    margin-bottom: 1rem;
+  }
+
+  .pick-card {
+    width: 40px; height: 52px;
+    border-radius: 6px;
+    border: 2px solid var(--card-border);
+    background: var(--card-bg);
+    font-size: 1rem;
+    font-weight: bold;
+    font-family: Georgia, serif;
+    color: var(--text);
+    cursor: pointer;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.2);
+  }
+
+  .pick-card:hover { border-color: var(--gold-dark); background: #fff8dc; }
+
+  #picker-cancel {
+    padding: 0.4rem 1.2rem;
+    background: #eee;
+    border: 1px solid #bbb;
+    border-radius: 6px;
+    cursor: pointer;
+    font-family: Georgia, serif;
+  }
+
   /* ── Game-over overlay ────────────────────────────────────── */
   #game-over-overlay {
     display: none;
@@ -420,6 +541,12 @@
 <div id="setup-screen">
   <h2>New Game</h2>
 
+  <div id="mode-tabs">
+    <div class="mode-tab selected" id="tab-play" onclick="setMode('play')">Play vs AI</div>
+    <div class="mode-tab" id="tab-advisor" onclick="setMode('advisor')">Advisor</div>
+  </div>
+  <p class="setup-hint" id="mode-hint">Play a game against the bot.</p>
+
   <div class="form-row">
     <label>Players (incl. you)</label>
     <select id="sel-players">
@@ -446,6 +573,27 @@
     </select>
   </div>
 
+  <div class="form-row" id="row-hints">
+    <label>Show EV hints</label>
+    <input type="checkbox" id="chk-hints" checked style="width:auto;transform:scale(1.3)">
+  </div>
+
+  <div class="form-row advisor-only" style="display:none">
+    <label>Your seat (0 acts first)</label>
+    <select id="sel-seat">
+      <option value="0" selected>0</option>
+      <option value="1">1</option>
+      <option value="2">2</option>
+      <option value="3">3</option>
+      <option value="4">4</option>
+    </select>
+  </div>
+
+  <div class="form-row advisor-only" style="display:none">
+    <label>First card flipped</label>
+    <input type="number" id="inp-first-card" min="3" max="35" value="">
+  </div>
+
   <button class="btn-primary" id="start-btn" onclick="startGame()">Start Game</button>
 </div>
 
@@ -453,7 +601,10 @@
 <div id="game-screen">
   <div id="top-bar">
     <span id="turn-label"></span>
-    <button id="new-game-btn" onclick="showSetup()">New game</button>
+    <span>
+      <button id="undo-btn" onclick="advisorUndo()">↩ Undo</button>
+      <button id="new-game-btn" onclick="showSetup()">New game</button>
+    </span>
   </div>
 
   <div id="players"></div>
@@ -469,13 +620,24 @@
     </div>
   </div>
 
+  <div id="analysis-box"></div>
+
   <div id="action-area">
-    <button class="action-btn" id="btn-take" onclick="doAction('take')" disabled>Take</button>
-    <button class="action-btn" id="btn-pass" onclick="doAction('pass')" disabled>Pass</button>
+    <button class="action-btn" id="btn-take" onclick="actionClicked('take')" disabled>Take</button>
+    <button class="action-btn" id="btn-pass" onclick="actionClicked('pass')" disabled>Pass</button>
   </div>
   <div id="ai-thinking"></div>
 
   <div id="log-box"></div>
+</div>
+
+<!-- Card picker (advisor mode: which card was flipped after a take?) -->
+<div id="card-picker-overlay">
+  <div id="card-picker-box">
+    <h3>Which card was flipped next?</h3>
+    <div id="picker-grid"></div>
+    <button id="picker-cancel" onclick="hidePicker()">Cancel</button>
+  </div>
 </div>
 
 <!-- Game-over overlay -->
@@ -486,27 +648,48 @@
     <table id="score-table">
       <thead>
         <tr>
-          <th>Player</th><th>Cards</th><th>Chips</th><th>Score</th>
+          <th>Player</th><th>Card pts</th><th>Chips</th><th>Score</th>
         </tr>
       </thead>
       <tbody id="score-rows"></tbody>
     </table>
     <button id="play-again-btn" onclick="showSetup()">Play Again</button>
+    <button id="go-undo-btn" style="display:none;margin-left:0.6rem;padding:0.7rem 1.2rem;
+      background:#eee;border:1px solid #bbb;border-radius:8px;font-family:Georgia,serif;
+      font-size:1rem;cursor:pointer" onclick="advisorUndo()">↩ Undo</button>
   </div>
 </div>
 
 <script>
 'use strict';
 
+let mode = 'play';      // 'play' | 'advisor'
 let sessionId = null;
 let humanSeat = null;
 let gameState = null;
-let logEntries = [];
+let advLog = [];        // advisor mode keeps its own move log client-side
+
+// ── Mode tabs ──────────────────────────────────────────────────────── //
+
+function setMode(m) {
+  mode = m;
+  document.getElementById('tab-play').classList.toggle('selected', m === 'play');
+  document.getElementById('tab-advisor').classList.toggle('selected', m === 'advisor');
+  document.getElementById('mode-hint').textContent = m === 'play'
+    ? 'Play a game against the bot.'
+    : 'Relay the moves of a real game and the bot suggests yours. ' +
+      'After a take, enter the card that was flipped next.';
+  for (const el of document.querySelectorAll('.advisor-only')) {
+    el.style.display = m === 'advisor' ? 'flex' : 'none';
+  }
+  document.getElementById('row-hints').style.display = m === 'play' ? 'flex' : 'none';
+}
 
 // ── Helpers ────────────────────────────────────────────────────────── //
 
 function playerName(seat, hs) {
   if (seat === hs) return 'You';
+  if (mode === 'advisor') return `P${seat}`;
   const names = ['Alex', 'Blake', 'Casey', 'Dana', 'Emery', 'Frankie', 'Gale'];
   const offset = seat < hs ? seat : seat - 1;
   return names[offset % names.length];
@@ -546,6 +729,8 @@ function render(data) {
   gameState = data;
   humanSeat = data.human_seat;
 
+  const proj = (data.analysis && data.analysis.proj_scores) || null;
+
   // Players
   const playersDiv = document.getElementById('players');
   playersDiv.innerHTML = '';
@@ -556,13 +741,15 @@ function render(data) {
     const div = document.createElement('div');
     div.className = `player-panel ${isHuman ? 'human' : 'ai'}${active ? ' active-turn' : ''}`;
 
-    const scoreSign = p.score < 0 ? '' : (p.score === 0 ? '' : '+');
-    // Lower is better — show score with sign-context
+    // Position strength: the search's expected final score for this seat
+    // (lower is better), next to the current raw score.
+    const projHtml = proj
+      ? `<span class="player-proj">proj. final <b>${proj[p.seat]}</b></span>` : '';
     div.innerHTML = `
       <div class="player-header">
         <span class="player-name ${isHuman ? 'human-name' : ''}">${name}${active ? ' ◀' : ''}</span>
         <span class="player-chips"><span class="chip-icon">🪙</span>${p.chips}</span>
-        <span class="player-score">Score: <span class="score-val">${p.score}</span></span>
+        <span class="player-score">Score: <span class="score-val">${p.score}</span>${projHtml}</span>
       </div>
       <div class="player-cards">${renderCards(p.cards)}</div>
     `;
@@ -588,27 +775,75 @@ function render(data) {
 
   // Turn label
   const turnEl = document.getElementById('turn-label');
+  const moverName = playerName(data.to_move, data.human_seat);
   if (data.game_over) {
     turnEl.textContent = 'Game over';
+  } else if (mode === 'advisor') {
+    turnEl.textContent = data.to_move === data.human_seat
+      ? 'Your turn — what did you do?' : `${moverName}'s turn — what did they do?`;
   } else if (data.is_human_turn) {
     turnEl.textContent = 'Your turn';
   } else {
-    const who = playerName(data.to_move, data.human_seat);
-    turnEl.textContent = `${who} is thinking…`;
+    turnEl.textContent = `${moverName} is thinking…`;
   }
 
-  // Buttons
-  const canAct = data.is_human_turn && !data.game_over;
+  // Analysis (EV per move + suggestion)
+  renderAnalysis(data);
+
+  // Buttons: in play mode they are the human's move; in advisor mode they
+  // record what the current mover actually did in the real game.
+  const canAct = !data.game_over && (mode === 'advisor' || data.is_human_turn);
   const canPass = canAct && data.legal_actions.includes('pass');
-  document.getElementById('btn-take').disabled = !canAct;
-  document.getElementById('btn-pass').disabled = !canPass;
+  const btnTake = document.getElementById('btn-take');
+  const btnPass = document.getElementById('btn-pass');
+  btnTake.disabled = !canAct;
+  btnPass.disabled = !canPass;
+  if (mode === 'advisor') {
+    const who = data.to_move === data.human_seat ? 'I' : 'They';
+    btnTake.textContent = `${who} took it`;
+    btnPass.textContent = `${who} passed`;
+  } else {
+    btnTake.textContent = 'Take';
+    btnPass.textContent = 'Pass';
+  }
   document.getElementById('ai-thinking').textContent = '';
 
+  // Undo only exists in advisor mode (real-game entry has typos)
+  const undoBtn = document.getElementById('undo-btn');
+  undoBtn.style.display = mode === 'advisor' ? 'inline-block' : 'none';
+  undoBtn.disabled = !data.can_undo;
+
   // Log
-  renderLog(data.log);
+  renderLog(mode === 'advisor' ? advLog : data.log);
 
   // Game over?
   if (data.game_over) showGameOver(data);
+}
+
+function renderAnalysis(data) {
+  const box = document.getElementById('analysis-box');
+  const a = data.analysis;
+  const show = a && !data.game_over &&
+               (mode === 'advisor' || data.is_human_turn);
+  if (!show) {
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = 'block';
+  if (a.forced) {
+    box.innerHTML = `<span class="suggest">Forced: ${a.forced}</span> (no chips to pass with)`;
+    return;
+  }
+  const mover = data.to_move === data.human_seat
+    ? 'you' : playerName(data.to_move, data.human_seat);
+  const evs = ['take', 'pass']
+    .filter(act => act in a.mover_ev)
+    .map(act => `${act} <b>${a.mover_ev[act]}</b>` +
+                (a.visits && act in a.visits ? ` <span style="color:#888">(${a.visits[act]} visits)</span>` : ''))
+    .join(' · ');
+  box.innerHTML =
+    `Bot suggests <span class="suggest">${a.best_action.toUpperCase()}</span>` +
+    ` for ${mover}<div class="ev-detail">expected final score: ${evs} — lower is better</div>`;
 }
 
 function renderLog(log) {
@@ -661,37 +896,81 @@ function showGameOver(data) {
     tbody.appendChild(tr);
   }
 
+  document.getElementById('go-undo-btn').style.display =
+    mode === 'advisor' ? 'inline-block' : 'none';
   document.getElementById('game-over-overlay').classList.add('visible');
 }
 
 // ── API calls ──────────────────────────────────────────────────────── //
+
+async function postJson(url, body) {
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    let msg = await resp.text();
+    try { msg = JSON.parse(msg).detail || msg; } catch (e) { /* raw text */ }
+    throw new Error(msg);
+  }
+  return resp.json();
+}
 
 async function startGame() {
   const n = parseInt(document.getElementById('sel-players').value);
   const r = parseInt(document.getElementById('sel-removed').value);
   const it = parseInt(document.getElementById('sel-iter').value);
 
+  let url, body;
+  if (mode === 'advisor') {
+    const seat = parseInt(document.getElementById('sel-seat').value);
+    const first = parseInt(document.getElementById('inp-first-card').value);
+    if (!(first >= 3 && first <= 35)) {
+      alert('Enter the first flipped card (3–35).');
+      return;
+    }
+    if (seat >= n) {
+      alert(`Your seat must be 0..${n - 1}.`);
+      return;
+    }
+    url = '/api/advisor/new';
+    body = {n_players: n, n_removed: r, n_iter: it, advised_seat: seat, first_card: first};
+  } else {
+    const hints = document.getElementById('chk-hints').checked;
+    url = '/api/new_game';
+    body = {n_players: n, n_removed: r, n_iter: it, hints};
+  }
+
   document.getElementById('start-btn').disabled = true;
   document.getElementById('start-btn').textContent = 'Starting…';
 
   try {
-    const resp = await fetch('/api/new_game', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({n_players: n, n_removed: r, n_iter: it}),
-    });
-    if (!resp.ok) throw new Error(await resp.text());
-    const data = await resp.json();
+    const data = await postJson(url, body);
     sessionId = data.session_id;
+    advLog = [];
     document.getElementById('setup-screen').style.display = 'none';
     document.getElementById('game-screen').style.display = 'block';
     document.getElementById('game-over-overlay').classList.remove('visible');
     render(data);
   } catch (e) {
-    alert('Failed to start game: ' + e.message);
+    alert('Failed to start: ' + e.message);
   } finally {
     document.getElementById('start-btn').disabled = false;
     document.getElementById('start-btn').textContent = 'Start Game';
+  }
+}
+
+function actionClicked(action) {
+  if (mode === 'advisor') {
+    // A take with pile cards left needs to know which card was flipped next.
+    if (action === 'take' && gameState && gameState.pile_remaining > 0) {
+      showPicker();
+    } else {
+      advisorMove(action, null);
+    }
+  } else {
+    doAction(action);
   }
 }
 
@@ -702,18 +981,58 @@ async function doAction(action) {
   document.getElementById('ai-thinking').textContent = 'AI is thinking…';
 
   try {
-    const resp = await fetch('/api/action', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({session_id: sessionId, action}),
-    });
-    if (!resp.ok) throw new Error(await resp.text());
-    const data = await resp.json();
+    const data = await postJson('/api/action', {session_id: sessionId, action});
     render(data);
   } catch (e) {
     alert('Error: ' + e.message);
     document.getElementById('ai-thinking').textContent = '';
   }
+}
+
+async function advisorMove(action, nextCard) {
+  if (!sessionId) return;
+  const prev = gameState;
+  try {
+    const data = await postJson('/api/advisor/move',
+      {session_id: sessionId, action, next_card: nextCard});
+    const evt = {seat: prev.to_move, action, card: prev.active_card};
+    if (action === 'take' && prev.pot) evt.chips_gained = prev.pot;
+    advLog.push(evt);
+    render(data);
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+async function advisorUndo() {
+  if (!sessionId) return;
+  try {
+    const data = await postJson('/api/advisor/undo', {session_id: sessionId});
+    advLog.pop();
+    document.getElementById('game-over-overlay').classList.remove('visible');
+    render(data);
+  } catch (e) {
+    alert('Error: ' + e.message);
+  }
+}
+
+// ── Card picker ────────────────────────────────────────────────────── //
+
+function showPicker() {
+  const grid = document.getElementById('picker-grid');
+  grid.innerHTML = '';
+  for (const c of gameState.unseen) {
+    const btn = document.createElement('button');
+    btn.className = 'pick-card';
+    btn.textContent = c;
+    btn.onclick = () => { hidePicker(); advisorMove('take', c); };
+    grid.appendChild(btn);
+  }
+  document.getElementById('card-picker-overlay').classList.add('visible');
+}
+
+function hidePicker() {
+  document.getElementById('card-picker-overlay').classList.remove('visible');
 }
 
 function showSetup() {
