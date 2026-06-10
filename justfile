@@ -35,6 +35,10 @@ eval *args:
 train-info *args:
     uv run python -m nothanks.cli train {{args}}
 
+# Play No Thanks against the AI in a browser (opens at http://localhost:8000)
+play *args:
+    uv run --group web python -m nothanks.web {{args}}
+
 # Open a Python REPL with the project importable
 repl:
     uv run python

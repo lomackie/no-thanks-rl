@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>No Thanks!</title>
+<style>
+  :root {
+    --green: #2d5a27;
+    --green-light: #3a7a32;
+    --gold: #f0c040;
+    --gold-dark: #c8a020;
+    --card-bg: #fefdf8;
+    --card-border: #c8b89a;
+    --red: #c0392b;
+    --text: #1a1a1a;
+    --muted: #6b7280;
+    --human-accent: #2563eb;
+    --human-bg: #eff6ff;
+    --ai-bg: #f9f9f9;
+    --shadow: 0 4px 16px rgba(0,0,0,0.3);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: 'Georgia', serif;
+    background: var(--green);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  h1 {
+    color: var(--gold);
+    font-size: 2rem;
+    text-align: center;
+    padding: 1rem 0 0.5rem;
+    letter-spacing: 0.05em;
+    text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+  }
+
+  /* ── Setup screen ─────────────────────────────────────────── */
+  #setup-screen {
+    background: rgba(0,0,0,0.35);
+    border-radius: 16px;
+    padding: 2rem 2.5rem;
+    margin: 1.5rem;
+    max-width: 420px;
+    width: 100%;
+    box-shadow: var(--shadow);
+    color: #f0ebe0;
+  }
+
+  #setup-screen h2 {
+    font-size: 1.2rem;
+    color: var(--gold);
+    margin-bottom: 1.2rem;
+    text-align: center;
+  }
+
+  .form-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 0.9rem;
+    gap: 1rem;
+  }
+
+  .form-row label { font-size: 0.95rem; }
+
+  .form-row select, .form-row input[type=number] {
+    padding: 0.35rem 0.6rem;
+    border-radius: 6px;
+    border: 1px solid #888;
+    font-size: 0.95rem;
+    background: #fff;
+    color: #000;
+    width: 90px;
+    text-align: center;
+  }
+
+  .btn-primary {
+    display: block;
+    width: 100%;
+    margin-top: 1.4rem;
+    padding: 0.8rem;
+    background: var(--gold);
+    color: #1a1200;
+    font-size: 1.1rem;
+    font-family: Georgia, serif;
+    font-weight: bold;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: background 0.15s;
+    letter-spacing: 0.04em;
+  }
+
+  .btn-primary:hover { background: var(--gold-dark); color: #fff; }
+  .btn-primary:disabled { background: #888; color: #ccc; cursor: default; }
+
+  /* ── Game layout ──────────────────────────────────────────── */
+  #game-screen { display: none; width: 100%; max-width: 720px; padding: 0 1rem 2rem; }
+
+  #top-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0.4rem 0 0.6rem;
+  }
+
+  #turn-label {
+    color: var(--gold);
+    font-size: 1rem;
+    font-style: italic;
+  }
+
+  #new-game-btn {
+    padding: 0.3rem 0.8rem;
+    background: rgba(0,0,0,0.3);
+    color: #e0ddd0;
+    border: 1px solid #888;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85rem;
+    font-family: Georgia, serif;
+  }
+
+  #new-game-btn:hover { background: rgba(0,0,0,0.5); }
+
+  /* ── Players ──────────────────────────────────────────────── */
+  #players { display: flex; flex-direction: column; gap: 0.6rem; margin-bottom: 0.8rem; }
+
+  .player-panel {
+    border-radius: 10px;
+    padding: 0.65rem 0.9rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    transition: box-shadow 0.2s, outline 0.2s;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.2);
+  }
+
+  .player-panel.human { background: var(--human-bg); border-left: 4px solid var(--human-accent); }
+  .player-panel.ai    { background: var(--ai-bg); border-left: 4px solid #aaa; }
+  .player-panel.active-turn { box-shadow: 0 0 0 3px var(--gold), 0 2px 6px rgba(0,0,0,0.2); }
+
+  .player-header {
+    display: flex;
+    align-items: baseline;
+    gap: 0.8rem;
+  }
+
+  .player-name {
+    font-weight: bold;
+    font-size: 0.95rem;
+    color: var(--text);
+  }
+
+  .player-name.human-name { color: var(--human-accent); }
+
+  .player-chips {
+    font-size: 0.85rem;
+    color: var(--muted);
+  }
+
+  .chip-icon { color: var(--gold-dark); margin-right: 1px; }
+
+  .player-score {
+    margin-left: auto;
+    font-size: 0.9rem;
+    color: #444;
+  }
+
+  .score-val { font-weight: bold; font-size: 1rem; color: var(--text); }
+
+  .player-cards {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-height: 26px;
+  }
+
+  .mini-card {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px; height: 30px;
+    border-radius: 5px;
+    border: 1.5px solid var(--card-border);
+    background: var(--card-bg);
+    font-size: 0.78rem;
+    font-weight: bold;
+    color: var(--text);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+  }
+
+  .mini-card.run-card {
+    background: #fff8dc;
+    border-color: #c8a020;
+    color: #7a5500;
+  }
+
+  /* ── Centre: active card zone ─────────────────────────────── */
+  #card-zone {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 0.6rem 0 0.8rem;
+    gap: 0.5rem;
+  }
+
+  #pile-info {
+    color: #d0cfc0;
+    font-size: 0.82rem;
+  }
+
+  #active-card-wrap {
+    display: flex;
+    align-items: center;
+    gap: 1.2rem;
+  }
+
+  #active-card {
+    width: 90px; height: 120px;
+    border-radius: 12px;
+    border: 3px solid var(--card-border);
+    background: var(--card-bg);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 2.6rem;
+    font-weight: bold;
+    color: var(--text);
+    box-shadow: var(--shadow);
+    transition: transform 0.15s;
+  }
+
+  #active-card.flash { animation: cardflip 0.3s ease; }
+
+  @keyframes cardflip {
+    0%   { transform: rotateY(90deg) scale(0.8); opacity: 0; }
+    100% { transform: rotateY(0deg) scale(1);    opacity: 1; }
+  }
+
+  #pot-display {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+
+  #pot-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    max-width: 80px;
+    justify-content: center;
+  }
+
+  .chip {
+    width: 20px; height: 20px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 35%, #ffe066, var(--gold-dark));
+    border: 1.5px solid #a07800;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    transition: transform 0.1s;
+  }
+
+  #pot-label { font-size: 0.78rem; color: #ccc; margin-top: 2px; }
+
+  /* ── Action buttons ───────────────────────────────────────── */
+  #action-area {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin: 0 0 0.8rem;
+  }
+
+  .action-btn {
+    padding: 0.7rem 2rem;
+    border-radius: 10px;
+    font-family: Georgia, serif;
+    font-size: 1.05rem;
+    font-weight: bold;
+    cursor: pointer;
+    border: 2px solid transparent;
+    transition: transform 0.1s, box-shadow 0.1s;
+    box-shadow: 0 3px 8px rgba(0,0,0,0.3);
+  }
+
+  .action-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 5px 12px rgba(0,0,0,0.35); }
+  .action-btn:active:not(:disabled) { transform: translateY(0); box-shadow: 0 2px 5px rgba(0,0,0,0.2); }
+  .action-btn:disabled { opacity: 0.4; cursor: default; }
+
+  #btn-take {
+    background: #e8f5e9;
+    border-color: #4caf50;
+    color: #1b5e20;
+  }
+
+  #btn-pass {
+    background: #fff8e1;
+    border-color: #ffc107;
+    color: #7a5500;
+  }
+
+  #ai-thinking {
+    color: #e0ddd0;
+    font-size: 0.85rem;
+    font-style: italic;
+    min-height: 1.4em;
+    text-align: center;
+  }
+
+  /* ── Log ──────────────────────────────────────────────────── */
+  #log-box {
+    background: rgba(0,0,0,0.3);
+    border-radius: 10px;
+    padding: 0.65rem 0.9rem;
+    max-height: 160px;
+    overflow-y: auto;
+    font-size: 0.8rem;
+    color: #ccc;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .log-entry { line-height: 1.4; }
+  .log-entry .log-human { color: #93c5fd; }
+  .log-entry .log-ai    { color: #d0cfc0; }
+  .log-entry .log-take  { color: #86efac; }
+  .log-entry .log-pass  { color: #fde68a; }
+  .log-entry .log-event { color: #9ca3af; font-style: italic; }
+
+  /* ── Game-over overlay ────────────────────────────────────── */
+  #game-over-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.7);
+    z-index: 100;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #game-over-overlay.visible { display: flex; }
+
+  #game-over-box {
+    background: var(--card-bg);
+    border-radius: 16px;
+    padding: 2rem 2.5rem;
+    max-width: 400px;
+    width: 90%;
+    text-align: center;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  }
+
+  #game-over-box h2 {
+    font-size: 1.6rem;
+    color: var(--red);
+    margin-bottom: 0.3rem;
+  }
+
+  #game-over-box h2.win { color: #16a34a; }
+
+  #result-msg {
+    font-size: 1rem;
+    color: #555;
+    margin-bottom: 1.2rem;
+  }
+
+  #score-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1.4rem;
+    font-size: 0.95rem;
+  }
+
+  #score-table th {
+    text-align: left;
+    padding: 0.3rem 0.5rem;
+    border-bottom: 2px solid #ddd;
+    color: #666;
+    font-weight: normal;
+    font-size: 0.82rem;
+  }
+
+  #score-table td {
+    padding: 0.35rem 0.5rem;
+    border-bottom: 1px solid #eee;
+  }
+
+  #score-table tr.winner td { font-weight: bold; color: #16a34a; }
+  #score-table tr.loser  td { color: #666; }
+
+  #play-again-btn {
+    padding: 0.7rem 2rem;
+    background: var(--green);
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    font-size: 1rem;
+    font-family: Georgia, serif;
+    cursor: pointer;
+  }
+
+  #play-again-btn:hover { background: var(--green-light); }
+</style>
+</head>
+<body>
+
+<h1>No Thanks!</h1>
+
+<!-- Setup screen -->
+<div id="setup-screen">
+  <h2>New Game</h2>
+
+  <div class="form-row">
+    <label>Players (incl. you)</label>
+    <select id="sel-players">
+      <option value="3" selected>3</option>
+      <option value="4">4</option>
+      <option value="5">5</option>
+    </select>
+  </div>
+
+  <div class="form-row">
+    <label>Cards removed</label>
+    <select id="sel-removed">
+      <option value="9" selected>9 (standard)</option>
+      <option value="0">0 (full deck)</option>
+    </select>
+  </div>
+
+  <div class="form-row">
+    <label>AI search depth</label>
+    <select id="sel-iter">
+      <option value="200">Fast (200)</option>
+      <option value="400" selected>Normal (400)</option>
+      <option value="800">Strong (800)</option>
+    </select>
+  </div>
+
+  <button class="btn-primary" id="start-btn" onclick="startGame()">Start Game</button>
+</div>
+
+<!-- Game screen -->
+<div id="game-screen">
+  <div id="top-bar">
+    <span id="turn-label"></span>
+    <button id="new-game-btn" onclick="showSetup()">New game</button>
+  </div>
+
+  <div id="players"></div>
+
+  <div id="card-zone">
+    <div id="pile-info"></div>
+    <div id="active-card-wrap">
+      <div id="active-card">–</div>
+      <div id="pot-display">
+        <div id="pot-chips"></div>
+        <div id="pot-label">on card</div>
+      </div>
+    </div>
+  </div>
+
+  <div id="action-area">
+    <button class="action-btn" id="btn-take" onclick="doAction('take')" disabled>Take</button>
+    <button class="action-btn" id="btn-pass" onclick="doAction('pass')" disabled>Pass</button>
+  </div>
+  <div id="ai-thinking"></div>
+
+  <div id="log-box"></div>
+</div>
+
+<!-- Game-over overlay -->
+<div id="game-over-overlay">
+  <div id="game-over-box">
+    <h2 id="go-title">Game Over</h2>
+    <p id="result-msg"></p>
+    <table id="score-table">
+      <thead>
+        <tr>
+          <th>Player</th><th>Cards</th><th>Chips</th><th>Score</th>
+        </tr>
+      </thead>
+      <tbody id="score-rows"></tbody>
+    </table>
+    <button id="play-again-btn" onclick="showSetup()">Play Again</button>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+let sessionId = null;
+let humanSeat = null;
+let gameState = null;
+let logEntries = [];
+
+// ── Helpers ────────────────────────────────────────────────────────── //
+
+function playerName(seat, hs) {
+  if (seat === hs) return 'You';
+  const names = ['Alex', 'Blake', 'Casey', 'Dana', 'Emery', 'Frankie', 'Gale'];
+  const offset = seat < hs ? seat : seat - 1;
+  return names[offset % names.length];
+}
+
+function chipEmoji(n) {
+  const coins = Math.min(n, 12);
+  let html = '';
+  for (let i = 0; i < coins; i++) html += '<div class="chip"></div>';
+  if (n > 12) html += `<span style="font-size:0.7rem;color:#888">+${n-12}</span>`;
+  return html;
+}
+
+// Detect consecutive-run membership for colouring
+function runSets(cards) {
+  const s = new Set(cards);
+  const run = new Set();
+  for (const c of s) {
+    // c is in a run with c+1 if both present
+    if (s.has(c + 1) || s.has(c - 1)) run.add(c);
+  }
+  return run;
+}
+
+function renderCards(cards) {
+  if (!cards.length) return '<span style="color:#aaa;font-size:0.8rem">none</span>';
+  const inRun = runSets(cards);
+  return cards.map(c => {
+    const cls = inRun.has(c) ? 'mini-card run-card' : 'mini-card';
+    return `<span class="${cls}">${c}</span>`;
+  }).join('');
+}
+
+// ── Render ─────────────────────────────────────────────────────────── //
+
+function render(data) {
+  gameState = data;
+  humanSeat = data.human_seat;
+
+  // Players
+  const playersDiv = document.getElementById('players');
+  playersDiv.innerHTML = '';
+  for (const p of data.players) {
+    const isHuman = p.is_human;
+    const active  = p.seat === data.to_move && !data.game_over;
+    const name    = playerName(p.seat, data.human_seat);
+    const div = document.createElement('div');
+    div.className = `player-panel ${isHuman ? 'human' : 'ai'}${active ? ' active-turn' : ''}`;
+
+    const scoreSign = p.score < 0 ? '' : (p.score === 0 ? '' : '+');
+    // Lower is better — show score with sign-context
+    div.innerHTML = `
+      <div class="player-header">
+        <span class="player-name ${isHuman ? 'human-name' : ''}">${name}${active ? ' ◀' : ''}</span>
+        <span class="player-chips"><span class="chip-icon">🪙</span>${p.chips}</span>
+        <span class="player-score">Score: <span class="score-val">${p.score}</span></span>
+      </div>
+      <div class="player-cards">${renderCards(p.cards)}</div>
+    `;
+    playersDiv.appendChild(div);
+  }
+
+  // Active card
+  if (!data.game_over) {
+    document.getElementById('pile-info').textContent =
+      `${data.pile_remaining} card${data.pile_remaining !== 1 ? 's' : ''} remaining in pile`;
+    const cardEl = document.getElementById('active-card');
+    const newCard = String(data.active_card);
+    if (cardEl.textContent !== newCard) {
+      cardEl.textContent = newCard;
+      cardEl.classList.remove('flash');
+      void cardEl.offsetWidth; // reflow
+      cardEl.classList.add('flash');
+    }
+    document.getElementById('pot-chips').innerHTML = chipEmoji(data.pot);
+    document.getElementById('pot-label').textContent =
+      data.pot === 0 ? 'no chips' : `${data.pot} chip${data.pot !== 1 ? 's' : ''}`;
+  }
+
+  // Turn label
+  const turnEl = document.getElementById('turn-label');
+  if (data.game_over) {
+    turnEl.textContent = 'Game over';
+  } else if (data.is_human_turn) {
+    turnEl.textContent = 'Your turn';
+  } else {
+    const who = playerName(data.to_move, data.human_seat);
+    turnEl.textContent = `${who} is thinking…`;
+  }
+
+  // Buttons
+  const canAct = data.is_human_turn && !data.game_over;
+  const canPass = canAct && data.legal_actions.includes('pass');
+  document.getElementById('btn-take').disabled = !canAct;
+  document.getElementById('btn-pass').disabled = !canPass;
+  document.getElementById('ai-thinking').textContent = '';
+
+  // Log
+  renderLog(data.log);
+
+  // Game over?
+  if (data.game_over) showGameOver(data);
+}
+
+function renderLog(log) {
+  const box = document.getElementById('log-box');
+  const entries = log.filter(e => e.action);
+  box.innerHTML = '';
+  for (const e of [...entries].reverse()) {
+    const name = playerName(e.seat, humanSeat);
+    const isH = e.seat === humanSeat;
+    const cls = isH ? 'log-human' : 'log-ai';
+    let text;
+    if (e.action === 'take') {
+      text = `<span class="${cls}">${name}</span> <span class="log-take">took</span> card <b>${e.card}</b>`
+           + (e.chips_gained ? ` (+${e.chips_gained} chips)` : '');
+    } else {
+      text = `<span class="${cls}">${name}</span> <span class="log-pass">passed</span> on ${e.card}`;
+    }
+    const div = document.createElement('div');
+    div.className = 'log-entry';
+    div.innerHTML = text;
+    box.appendChild(div);
+  }
+}
+
+function showGameOver(data) {
+  const scores = data.final_scores;
+  const minScore = Math.min(...scores);
+  const winnerSeats = scores.map((s, i) => s === minScore ? i : -1).filter(i => i >= 0);
+  const humanWon = winnerSeats.includes(data.human_seat);
+
+  const title = document.getElementById('go-title');
+  title.textContent = humanWon ? (winnerSeats.length === 1 ? 'You Win!' : 'Tie!') : 'Game Over';
+  title.className = humanWon ? 'win' : '';
+
+  document.getElementById('result-msg').textContent = humanWon
+    ? (winnerSeats.length === 1 ? 'Well played!' : 'It\'s a tie — well played!')
+    : `You scored ${scores[data.human_seat]}. Lower is better.`;
+
+  const tbody = document.getElementById('score-rows');
+  tbody.innerHTML = '';
+  // Sort by score ascending
+  const order = [...data.players].sort((a, b) => a.score - b.score);
+  for (const p of order) {
+    const tr = document.createElement('tr');
+    const isWinner = winnerSeats.includes(p.seat);
+    tr.className = isWinner ? 'winner' : 'loser';
+    const name = playerName(p.seat, data.human_seat);
+    tr.innerHTML = `<td>${name}${p.is_human ? ' (you)' : ''}</td>`
+      + `<td>${p.card_score}</td><td>${p.chips}</td><td><b>${p.score}</b></td>`;
+    tbody.appendChild(tr);
+  }
+
+  document.getElementById('game-over-overlay').classList.add('visible');
+}
+
+// ── API calls ──────────────────────────────────────────────────────── //
+
+async function startGame() {
+  const n = parseInt(document.getElementById('sel-players').value);
+  const r = parseInt(document.getElementById('sel-removed').value);
+  const it = parseInt(document.getElementById('sel-iter').value);
+
+  document.getElementById('start-btn').disabled = true;
+  document.getElementById('start-btn').textContent = 'Starting…';
+
+  try {
+    const resp = await fetch('/api/new_game', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({n_players: n, n_removed: r, n_iter: it}),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const data = await resp.json();
+    sessionId = data.session_id;
+    document.getElementById('setup-screen').style.display = 'none';
+    document.getElementById('game-screen').style.display = 'block';
+    document.getElementById('game-over-overlay').classList.remove('visible');
+    render(data);
+  } catch (e) {
+    alert('Failed to start game: ' + e.message);
+  } finally {
+    document.getElementById('start-btn').disabled = false;
+    document.getElementById('start-btn').textContent = 'Start Game';
+  }
+}
+
+async function doAction(action) {
+  if (!sessionId) return;
+  document.getElementById('btn-take').disabled = true;
+  document.getElementById('btn-pass').disabled = true;
+  document.getElementById('ai-thinking').textContent = 'AI is thinking…';
+
+  try {
+    const resp = await fetch('/api/action', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: sessionId, action}),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const data = await resp.json();
+    render(data);
+  } catch (e) {
+    alert('Error: ' + e.message);
+    document.getElementById('ai-thinking').textContent = '';
+  }
+}
+
+function showSetup() {
+  document.getElementById('game-over-overlay').classList.remove('visible');
+  document.getElementById('game-screen').style.display = 'none';
+  document.getElementById('setup-screen').style.display = 'block';
+  sessionId = null;
+}
+</script>
+</body>
+</html>
