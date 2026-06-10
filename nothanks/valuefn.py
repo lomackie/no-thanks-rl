@@ -108,6 +108,14 @@ class ValueNet:
         """Value vector for ``s`` in its own mover-relative perspective."""
         return self.forward(features(s)[None, :])[0]
 
+    def copy(self) -> "ValueNet":
+        """A deep copy of the weights (fresh Adam state). Used as a target network."""
+        clone = ValueNet(self.n_players, hidden=self.hidden)
+        for k in self._PARAMS:
+            getattr(clone, k)[...] = getattr(self, k)
+        clone._reset_adam()
+        return clone
+
     def save(self, path) -> None:
         np.savez(
             path,

@@ -46,7 +46,8 @@ Or without `just`: `uv sync`, `uv run pytest`, `uv run python -m nothanks.demo`.
 - `nothanks/features.py` — mover-relative feature encoding of a state.
 - `nothanks/valuefn.py` — tiny NumPy MLP value function (vector-valued head) and
   the fast one-ply `evaluate_v` move eval.
-- `nothanks/train.py` — self-play TD(λ) training and a head-to-head grader.
+- `nothanks/train.py` — self-play TD(λ) training (heuristic→self-play curriculum
+  with a target network) plus head-to-head and seat-balanced net-vs-net graders.
 - `nothanks/imperfect.py` — hidden removed cards: information sets, determinization,
   and PIMC move analysis wrapping any per-world evaluator.
 - `nothanks/exploit.py` — exact best-response / exploitability for the testbed.

@@ -103,11 +103,19 @@ def selfplay_game(
     return steps
 
 
-def _lambda_returns(net: ValueNet, steps: list[_Step], lam: float) -> tuple:
-    """λ-return targets for one episode: returns (X, T) in mover-relative frames."""
+def _lambda_returns(
+    net: ValueNet, steps: list[_Step], lam: float, target: ValueNet | None = None
+) -> tuple:
+    """λ-return targets for one episode: returns (X, T) in mover-relative frames.
+
+    Bootstraps use ``target`` (a frozen *target network*) when given, otherwise the
+    live ``net`` — holding the bootstrap value fixed across several iterations is
+    what stabilises fitted-value iteration.
+    """
+    target = target if target is not None else net
     n = net.n_players
     feats = np.stack([st.feat for st in steps])
-    preds = net.forward(feats)  # mover-frame value of each visited state
+    preds = target.forward(feats)  # mover-frame value of each visited state
     # Absolute-frame value U(s) = inverse rotation of the mover-frame prediction.
     U_abs = np.stack([np.roll(preds[i], steps[i].mover) for i in range(len(steps))])
 
@@ -133,7 +141,9 @@ def train(
     lam: float = 0.9,
     eps_start: float = 0.3,
     eps_end: float = 0.05,
-    behavior: str = "heuristic",
+    heur_frac_start: float = 1.0,
+    heur_frac_end: float = 1.0,
+    target_refresh: int = 1,
     hidden: int = 64,
     n_removed: int = 9,
     start_chips: int | None = None,
@@ -142,26 +152,43 @@ def train(
 ) -> ValueNet:
     """Train a value net by self-play TD(λ).
 
-    ``behavior`` selects the data-generating policy: ``"heuristic"`` (default —
-    competent play, yields a calibrated evaluator and an improvement step) or
-    ``"greedy"`` (pure self-play on the net, which can collapse from scratch).
+    Data-generating policy — the curriculum. Each *game* is generated either by the
+    heuristic (with probability ``heur_frac``) or by ε-greedy self-play on the
+    current net, where ``heur_frac`` is annealed linearly from ``heur_frac_start``
+    to ``heur_frac_end`` over training. The defaults (``1.0 → 1.0``) reproduce the
+    pure-heuristic baseline: competent data that calibrates the net and makes
+    greedy(net) a one-step policy improvement. Lowering ``heur_frac_end`` (e.g. to
+    ``0.25``) shifts toward **pure self-play** in the second half — approximate
+    policy iteration that can push *past* the heuristic ceiling — while the
+    remaining heuristic-anchored games keep it from collapsing into value-noise
+    trajectories (the failure mode of greedy-from-blank).
+
+    Stability. Targets are bootstrapped from a frozen **target network** refreshed
+    every ``target_refresh`` iterations (``1`` = the old snapshot-per-iteration
+    behaviour), then fitted for ``epochs_per_iter`` epochs.
     """
     net = ValueNet(n_players, hidden=hidden, seed=seed)
+    target = net.copy()
     rng = random.Random(seed)
     np_rng = np.random.default_rng(seed)
-    behavior_fn = BEHAVIORS[behavior]
 
     for it in range(iterations):
         frac = it / max(iterations - 1, 1)
         eps = eps_start + (eps_end - eps_start) * frac
+        heur_frac = heur_frac_start + (heur_frac_end - heur_frac_start) * frac
 
-        games = [
-            selfplay_game(net, rng, eps, behavior_fn,
-                          n_removed=n_removed, start_chips=start_chips)
-            for _ in range(games_per_iter)
-        ]
-        # Build λ-return targets from a single net snapshot, then fit them.
-        XT = [_lambda_returns(net, g, lam) for g in games]
+        if it % target_refresh == 0:
+            target = net.copy()
+
+        games = []
+        for _ in range(games_per_iter):
+            behavior_fn = heuristic_behavior if rng.random() < heur_frac else greedy_behavior
+            games.append(
+                selfplay_game(net, rng, eps, behavior_fn,
+                              n_removed=n_removed, start_chips=start_chips)
+            )
+        # Build λ-return targets against the frozen target net, then fit them.
+        XT = [_lambda_returns(net, g, lam, target=target) for g in games]
         X = np.concatenate([x for x, _ in XT])
         T = np.concatenate([t for _, t in XT])
 
@@ -173,7 +200,8 @@ def train(
                 last_loss = net.train_step(X[idx], T[idx], lr)
 
         if log:
-            print(f"iter {it:3d}  eps {eps:.2f}  steps {len(X):5d}  loss {last_loss:.3f}")
+            print(f"iter {it:3d}  eps {eps:.2f}  heur {heur_frac:.2f}  "
+                  f"steps {len(X):5d}  loss {last_loss:.3f}")
 
     return net
 
@@ -213,26 +241,84 @@ def head_to_head(
     }
 
 
+def net_vs_net(
+    net_a: ValueNet,
+    net_b: ValueNet,
+    n_games: int = 1500,
+    seed: int = 30_000,
+    n_removed: int = 9,
+) -> dict:
+    """Seat-balanced head-to-head: greedy(``net_a``) vs greedy(``net_b``).
+
+    Seat 0 has a large structural advantage in this game (it acts first and can
+    sweep), so a fair comparison rotates ``net_a`` through *every* seat — replaying
+    the same ``n_games`` games for each seat assignment (a paired design, lower
+    variance) — and averages. Lower ``a_mean`` than ``b_mean`` means ``net_a`` is
+    the stronger policy; ``a_win_rate`` is its tie-or-beat rate against
+    ``parity = 1/n``. This is how we tell whether self-play overtook the
+    heuristic-only baseline net.
+    """
+    n = net_a.n_players
+    a = lambda s: greedy_action(s, net_a)  # noqa: E731
+    b = lambda s: greedy_action(s, net_b)  # noqa: E731
+    a_total = b_total = 0.0
+    a_wins = 0
+    games = 0
+    for seat in range(n):
+        for i in range(n_games):
+            rng = random.Random(seed + i)  # same games across seats (paired)
+            s = new_game(n, n_removed=n_removed, rng=rng)
+            while not is_terminal(s):
+                s = step(s, a(s) if s.to_move == seat else b(s), rng)
+            sc = final_scores(s)
+            a_total += sc[seat]
+            b_total += (sum(sc) - sc[seat]) / (n - 1)
+            if sc[seat] <= min(sc):
+                a_wins += 1
+            games += 1
+    return {
+        "a_mean": a_total / games,
+        "b_mean": b_total / games,
+        "a_win_rate": a_wins / games,
+        "parity": 1.0 / n,
+    }
+
+
 def _demo() -> None:
-    """Train a 3-player net, show an engine eval, then validate policy strength."""
+    """Train a heuristic-only baseline and a self-play net; show self-play wins."""
     from .valuefn import evaluate_v
 
-    print("training a 3-player value net by self-play TD(λ) on heuristic data...")
-    net = train(n_players=3, log=True)
+    print("baseline — value net on pure heuristic data (TD-λ):")
+    base = train(n_players=3, log=True)
+
+    print("\nself-play — warmup on heuristic, then anneal to greedy self-play"
+          " with a target net (slower: greedy data costs a forward pass per move):")
+    sp = train(n_players=3, heur_frac_start=1.0, heur_frac_end=0.25,
+               target_refresh=5, log=True)
 
     # Engine-style eval of a full opening: instant, one forward pass per successor.
     s = new_game(3, n_removed=9, rng=random.Random(1))
-    ev = evaluate_v(s, net)
-    print(f"\nengine eval — card {s.active} face-up (pot {s.pot}), P{ev['to_move']} to move:")
+    ev = evaluate_v(s, sp)
+    print(f"\nengine eval (self-play net) — card {s.active} face-up (pot {s.pot}),"
+          f" P{ev['to_move']} to move:")
     for a, v in ev["mover_ev"].items():
         print(f"  {a:5s} -> EV {v:+7.2f}   vec {tuple(round(x, 1) for x in ev['actions'][a])}")
     print(f"  best: {ev['best_action']}")
 
-    # Validation that actually means something: does greedy(net) beat the baseline?
-    print("\nvalidation — greedy(net) seat 0 vs heuristic seats (lower is better):")
-    h2h = head_to_head(net)
-    print(f"  value-net mean score {h2h['vnet_mean']:.2f}  vs  heuristic {h2h['heuristic_mean']:.2f}")
-    print(f"  win/tie rate {h2h['win_rate']:.1%}  (parity for 3 players ≈ {h2h['parity']:.0%})")
+    # Two metrics, because they say different things. Against the heuristic, the
+    # heuristic-trained baseline specialises in exploiting it; head-to-head between
+    # the nets is the fairer test of general strength.
+    print("\nvs heuristic (greedy seat 0 vs heuristic seats; baseline overfits this):")
+    for name, net in (("baseline ", base), ("self-play", sp)):
+        h2h = head_to_head(net, n_games=1500)
+        print(f"  {name}: net {h2h['vnet_mean']:.2f}  vs  heuristic"
+              f" {h2h['heuristic_mean']:.2f}   win/tie {h2h['win_rate']:.1%}"
+              f"  (parity ≈ {h2h['parity']:.0%})")
+
+    print("\nself-play vs baseline (seat-balanced; lower mean / >parity win = stronger):")
+    nvn = net_vs_net(sp, base, n_games=800)
+    print(f"  self-play {nvn['a_mean']:.2f}  vs  baseline {nvn['b_mean']:.2f}"
+          f"   self-play win/tie {nvn['a_win_rate']:.1%}  (parity ≈ {nvn['parity']:.0%})")
 
 
 if __name__ == "__main__":
