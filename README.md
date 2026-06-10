@@ -30,6 +30,7 @@ just test     # uv run pytest
 just demo     # exact-solve a tiny game and print an opening eval
 just mc-demo  # Monte-Carlo eval: tiny-game sanity check + a full opening
 just train    # train a self-play value net, eval an opening, grade it vs heuristic
+just imperfect # hidden removed cards: determinized (PIMC) eval + exploitability
 just repl     # python REPL with the project importable
 ```
 
@@ -46,5 +47,9 @@ Or without `just`: `uv sync`, `uv run pytest`, `uv run python -m nothanks.demo`.
 - `nothanks/valuefn.py` — tiny NumPy MLP value function (vector-valued head) and
   the fast one-ply `evaluate_v` move eval.
 - `nothanks/train.py` — self-play TD(λ) training and a head-to-head grader.
+- `nothanks/imperfect.py` — hidden removed cards: information sets, determinization,
+  and PIMC move analysis wrapping any per-world evaluator.
+- `nothanks/exploit.py` — exact best-response / exploitability for the testbed.
 - `nothanks/demo.py` — prints an engine-style exact evaluation of a tiny opening.
 - `nothanks/mc_demo.py` — Monte-Carlo eval demo (sampler vs. exact on a tiny game).
+- `nothanks/imperfect_demo.py` — determinized (PIMC) eval + exploitability demo.

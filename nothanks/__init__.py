@@ -14,6 +14,15 @@ from .engine import (
     score_delta,
     is_terminal,
 )
+from .imperfect import (
+    InfoSet,
+    determinize,
+    evaluate_determinized,
+    info_from_state,
+    pile_remaining,
+    unseen,
+)
+from .exploit import best_response_value, exploitability, optimal_policy
 
 __all__ = [
     "State",
@@ -28,4 +37,13 @@ __all__ = [
     "score_cards",
     "score_delta",
     "is_terminal",
+    "InfoSet",
+    "determinize",
+    "evaluate_determinized",
+    "info_from_state",
+    "pile_remaining",
+    "unseen",
+    "best_response_value",
+    "exploitability",
+    "optimal_policy",
 ]

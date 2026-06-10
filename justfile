@@ -23,6 +23,10 @@ mc-demo:
 train:
     uv run python -m nothanks.train
 
+# Hidden removed cards: determinized (PIMC) eval + exploitability checks
+imperfect:
+    uv run python -m nothanks.imperfect_demo
+
 # Open a Python REPL with the project importable
 repl:
     uv run python
