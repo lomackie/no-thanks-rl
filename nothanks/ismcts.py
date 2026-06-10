@@ -34,14 +34,23 @@ Selfish multi-agent backup
 Every decision node — whoever is to move — minimises *its own* expected final
 score, the same self-interested convention as :func:`nothanks.belief.solve` (the
 belief optimum, exploitability ~0). So each node reads the value vector's entry
-for its own mover and uses a lower-confidence bound (we are minimising). Given
-enough iterations the root action approaches ``belief.solve``'s, and — measured by
-:func:`nothanks.belief.exploitability` — IS-MCTS is *less exploitable than PIMC*,
-quantifying the value PIMC leaves on the table.
+for its own mover and uses a lower-confidence bound (we are minimising). On the
+small games we can check exactly, the root action converges to ``belief.solve``'s
+— *empirically*: selfish multi-agent UCT has no general convergence theorem
+(unlike two-player zero-sum UCT), so treat that as a tested observation, not a
+guarantee. Measured by :func:`nothanks.belief.exploitability`, IS-MCTS is *less
+exploitable than PIMC*, quantifying the value PIMC leaves on the table.
 
 The leaf evaluator is pluggable (:data:`LeafEvaluator`); the default is an honest
 heuristic playout on the belief game, so the whole search only ever touches public
 information — it never inspects the removed cards.
+
+Scaling note: the exploration constant ``c`` is on the scale of *final scores*
+(the LCB subtracts ``c·sqrt(log N / n)`` from a mean score). The default 1.5 suits
+the tiny testbed configurations the tests solve exactly; on the full deck, where
+score gaps between actions run to tens of points, it is far too timid — a single
+noisy playout can pin an action at one visit forever. Full-game entry points
+(:func:`nothanks.train.head_to_head_ismcts`, the CLI) default to ``c≈30``.
 """
 
 from __future__ import annotations
@@ -51,6 +60,8 @@ import random
 from dataclasses import dataclass, field
 from typing import Callable
 
+import numpy as np
+
 from .belief import (
     apply_pass,
     final_scores,
@@ -58,6 +69,7 @@ from .belief import (
     is_terminal,
     take_outcomes,
 )
+from .features import info_features
 from .imperfect import InfoSet, legal_actions
 
 # Estimates the absolute-frame expected final-score vector of a *non-terminal*
@@ -90,6 +102,24 @@ def heuristic_rollout(info: InfoSet, rng: random.Random, threshold: int = 0) -> 
         else:
             info = _sample_child(info, rng)
     return final_scores(info)
+
+
+def make_value_leaf(net) -> LeafEvaluator:
+    """A :data:`LeafEvaluator` from an **info-set** value net (one forward pass).
+
+    ``net`` must be an info-set net (:func:`nothanks.beliefnet.make_info_net`):
+    it consumes :func:`nothanks.features.info_features` — public knowledge only —
+    so the leaf is honest by construction. The net predicts in the mover-relative
+    frame; rolling by ``to_move`` converts to the absolute frame the backup sums.
+    This is what scales the search to the full deck: a forward pass replaces a
+    whole heuristic playout, and the net's value is a far stronger leaf estimate.
+    """
+
+    def leaf(info: InfoSet, _rng: random.Random) -> tuple[float, ...]:
+        pred = net.forward(info_features(info)[None, :])[0]
+        return tuple(float(x) for x in np.roll(pred, info.to_move))
+
+    return leaf
 
 
 @dataclass
@@ -229,6 +259,20 @@ def ismcts_action(
     return ismcts_evaluate(info, n_iter, evaluator, c, rng)["best_action"]
 
 
+def _info_key(info: InfoSet) -> str:
+    """A canonical, process-stable string key for an info set.
+
+    ``hash(info)`` would do within one process, but frozenset iteration order and
+    (for any future str field) hash salting make it fragile across processes; a
+    sorted textual key seeds :class:`random.Random` stably everywhere (str seeding
+    is hashed with sha512, not the salted ``hash``).
+    """
+    cards = ";".join(",".join(map(str, sorted(c))) for c in info.cards)
+    deck = ",".join(map(str, sorted(info.deck)))
+    return (f"{info.chips}|{cards}|{info.active}|{info.pot}|{info.to_move}"
+            f"|{deck}|{info.n_removed}")
+
+
 def make_ismcts_policy(
     n_iter: int = 800,
     evaluator: LeafEvaluator | None = None,
@@ -239,10 +283,10 @@ def make_ismcts_policy(
 
     :func:`nothanks.belief.exploitability` evaluates a policy by exact backward
     induction, so it needs ``policy(info)`` to be a *deterministic* function of the
-    info set. We get that by seeding the search rng from ``(seed, info)``, so the
-    same info set always yields the same move — making the IS-MCTS player gradeable
-    against the belief-correct best response, the headline measurement this module
-    targets.
+    info set. We get that by seeding the search rng from ``seed`` and a canonical
+    key of the info set (:func:`_info_key`), so the same info set always yields the
+    same move — making the IS-MCTS player gradeable against the belief-correct best
+    response, the headline measurement this module targets.
     """
     evaluator = evaluator or heuristic_rollout
 
@@ -250,7 +294,47 @@ def make_ismcts_policy(
         acts = legal_actions(info)
         if len(acts) == 1:
             return acts[0]
-        rng = random.Random(hash((seed, info)))
+        rng = random.Random(f"{seed}|{_info_key(info)}")
         return ismcts_evaluate(info, n_iter, evaluator, c, rng)["best_action"]
 
     return policy
+
+
+class ISMCTSBot:
+    """The deployable IS-MCTS player: a persistent tree reused across moves.
+
+    :func:`ismcts_action` rebuilds its tree from scratch every call. Within one
+    game that wastes work: after a move and the opponents' replies, the new root
+    is a descendant info set whose statistics the previous search already
+    visited. Keeping one ``tree`` for the bot's lifetime lets every ``act`` start
+    warm (stale nodes from unreachable lines are never visited again and are
+    merely memory). Honest like everything here: ``act`` consumes an
+    :class:`~nothanks.imperfect.InfoSet`, never a god-view state.
+
+    Use one bot per game (or per seat); the tree is only meaningful within a
+    single rule configuration (``deck``/``n_removed``/player count).
+    """
+
+    def __init__(
+        self,
+        n_iter: int = 800,
+        evaluator: LeafEvaluator | None = None,
+        c: float = 1.5,
+        seed: int = 0,
+    ):
+        self.n_iter = n_iter
+        self.evaluator = evaluator or heuristic_rollout
+        self.c = c
+        self.rng = random.Random(seed)
+        self.tree: dict[InfoSet, _Node] = {}
+
+    def act(self, info: InfoSet) -> str:
+        acts = legal_actions(info)
+        if not acts:
+            raise ValueError("terminal info set has no action to choose")
+        if len(acts) == 1:
+            return acts[0]
+        for _ in range(self.n_iter):
+            _simulate(self.tree, info, self.evaluator, self.c, self.rng)
+        root = self.tree[info]
+        return max(root.na, key=lambda a: (root.na[a], -root.mean_own(a)))

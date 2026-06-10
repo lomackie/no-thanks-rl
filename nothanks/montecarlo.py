@@ -75,11 +75,18 @@ def evaluate_mc(
     mover's own expected score. ``stderr`` is the standard error of that own-score
     estimate, so a gap between two actions is only meaningful when it comfortably
     exceeds their combined ``stderr``.
+
+    Common random numbers: rollout ``j`` uses the same seed for *every* action, so
+    the chance draws are shared across the take/pass arms. Each per-action mean is
+    unchanged (still unbiased), but the take−pass *gap* — the number actually read
+    — gets positively correlated samples and hence a smaller variance than the
+    per-action ``stderr`` values alone would suggest.
     """
     policy = policy or default_policy
     rng = rng or random.Random()
     n = s.n_players
     p = s.to_move
+    base = rng.randrange(1 << 62)  # one seed sequence shared by all actions
 
     actions: dict[str, tuple[float, ...]] = {}
     stderr: dict[str, float] = {}
@@ -87,9 +94,10 @@ def evaluate_mc(
         acc = [0.0] * n
         own_sum = 0.0
         own_sumsq = 0.0
-        for _ in range(n_rollouts):
-            nxt = step(s, action, rng)
-            scores = rollout(nxt, policy, rng)
+        for j in range(n_rollouts):
+            r = random.Random(base + j)
+            nxt = step(s, action, r)
+            scores = rollout(nxt, policy, r)
             for i in range(n):
                 acc[i] += scores[i]
             own_sum += scores[p]

@@ -79,3 +79,56 @@ def features(s: State) -> np.ndarray:
             np.array([delta, pot], dtype=np.float32),
         ]
     )
+
+
+# --------------------------------------------------------------------------- #
+# Info-set features — public knowledge only (no god view)
+# --------------------------------------------------------------------------- #
+
+def info_feature_dim(n_players: int) -> int:
+    """Length of the vector returned by :func:`info_features` for ``n_players``."""
+    # Per-seat held block (n) + unseen + active one-hot, then per-seat
+    # (chips, score) plus the mover's delta, the pot, and pile_remaining.
+    return (n_players + 2) * N_CARDS + 2 * n_players + 3
+
+
+def info_features(info) -> np.ndarray:
+    """Mover-relative features of a non-terminal :class:`~nothanks.imperfect.InfoSet`.
+
+    Same layout as :func:`features` with one structural change: the god-view
+    ``remaining`` multi-hot (which reveals the removed cards) is replaced by what
+    the mover actually knows — the **unseen** multi-hot (pile ∪ removed,
+    indistinguishable) plus the public ``pile_remaining`` count. A net over these
+    features is honest by construction: two worlds behind the same info set get
+    identical encodings, so no PIMC wrapper is needed at play time.
+    """
+    from .imperfect import pile_remaining, unseen  # late: imperfect imports engine only
+
+    p = info.to_move
+    n = info.n_players
+    order = seat_order(p, n)
+
+    held = [_card_multihot(info.cards[q]) for q in order]
+    unseen_hot = _card_multihot(unseen(info))
+    active_onehot = np.zeros(N_CARDS, dtype=np.float32)
+    active_onehot[info.active - DECK_LOW] = 1.0
+
+    chips = np.array([info.chips[q] / _CHIP_NORM for q in order], dtype=np.float32)
+    scores = np.array(
+        [score_cards(info.cards[q]) / _SCORE_NORM for q in order], dtype=np.float32
+    )
+
+    delta = np.float32(score_delta(info.cards[p], info.active) / _CARD_NORM)
+    pot = np.float32(info.pot / _CHIP_NORM)
+    pile = np.float32(pile_remaining(info) / N_CARDS)
+
+    return np.concatenate(
+        [
+            *held,
+            unseen_hot,
+            active_onehot,
+            chips,
+            scores,
+            np.array([delta, pot, pile], dtype=np.float32),
+        ]
+    )

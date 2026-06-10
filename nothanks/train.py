@@ -22,6 +22,7 @@ Run a quick training + sanity demo with ``just train``.
 
 from __future__ import annotations
 
+import math
 import random
 from typing import Callable
 
@@ -252,9 +253,10 @@ def net_vs_net(
     """Seat-balanced head-to-head: greedy(``net_a``) vs greedy(``net_b``).
 
     Seat 0 has a large structural advantage in this game (it acts first and can
-    sweep), so a fair comparison rotates ``net_a`` through *every* seat — replaying
-    the same ``n_games`` games for each seat assignment (a paired design, lower
-    variance) — and averages. Lower ``a_mean`` than ``b_mean`` means ``net_a`` is
+    sweep), so a fair comparison rotates ``net_a`` through *every* seat — re-dealing
+    the same ``n_games`` shuffles for each seat assignment — and averages. The
+    shared seed only pairs the deals: play diverges as soon as any action differs,
+    so the variance reduction is partial, not a fully paired design. Lower ``a_mean`` than ``b_mean`` means ``net_a`` is
     the stronger policy; ``a_win_rate`` is its tie-or-beat rate against
     ``parity = 1/n``. This is how we tell whether self-play overtook the
     heuristic-only baseline net.
@@ -319,12 +321,14 @@ def head_to_head_hidden(
     already a function of public state). Because the bot never sees the removed
     cards, this is the fair measure of its *real* playing strength. Slower than
     :func:`head_to_head`: every bot move averages over ``n_worlds`` determinized
-    worlds, so keep ``n_games``/``n_worlds`` modest.
+    worlds, so keep ``n_games``/``n_worlds`` modest — and read the means against
+    ``vnet_stderr``, which is large at small ``n_games``.
     """
     n = net.n_players
     bot = pimc_policy(net, n_removed=n_removed, n_worlds=n_worlds)
     heur = lambda s: heuristic_action(s, 0)  # noqa: E731
-    v_total = h_total = 0.0
+    v_scores: list[float] = []
+    h_total = 0.0
     v_wins = 0
     for i in range(n_games):
         rng = random.Random(seed + i)
@@ -333,15 +337,71 @@ def head_to_head_hidden(
             a = bot(s, rng) if s.to_move == 0 else heur(s)
             s = step(s, a, rng)
         sc = final_scores(s)
-        v_total += sc[0]
+        v_scores.append(sc[0])
         h_total += sum(sc[1:]) / (n - 1)
         if sc[0] <= min(sc[1:]):
             v_wins += 1
+    v_mean = sum(v_scores) / n_games
+    v_var = sum((x - v_mean) ** 2 for x in v_scores) / n_games
     return {
-        "vnet_mean": v_total / n_games,
+        "vnet_mean": v_mean,
+        "vnet_stderr": math.sqrt(v_var / n_games),
         "heuristic_mean": h_total / n_games,
         "win_rate": v_wins / n_games,
         "parity": 1.0 / n,
+    }
+
+
+def head_to_head_ismcts(
+    n_players: int = 3,
+    n_games: int = 100,
+    n_iter: int = 200,
+    evaluator=None,
+    c: float = 30.0,  # full-game score scale; see the ismcts module docstring
+    seed: int = 20_000,
+    n_removed: int = 9,
+) -> dict:
+    """Grade the deployable IS-MCTS bot against the heuristic on real games.
+
+    Seat 0 is an :class:`~nothanks.ismcts.ISMCTSBot` (fresh per game, its tree
+    persisting across that game's moves); other seats follow the heuristic. The
+    bot only ever receives its :class:`~nothanks.imperfect.InfoSet`, so like
+    :func:`head_to_head_hidden` this is a no-peek measurement. ``evaluator`` is
+    the search's leaf — default honest heuristic playout; pass
+    ``ismcts.make_value_leaf(info_net)`` for the net-leaf bot. Slow (a full search
+    per move), so keep ``n_games``/``n_iter`` modest and read the means against
+    ``bot_stderr``.
+    """
+    from .imperfect import info_from_state
+    from .ismcts import ISMCTSBot
+
+    heur = lambda s: heuristic_action(s, 0)  # noqa: E731
+    b_scores: list[float] = []
+    h_total = 0.0
+    b_wins = 0
+    for i in range(n_games):
+        rng = random.Random(seed + i)
+        bot = ISMCTSBot(n_iter=n_iter, evaluator=evaluator, c=c, seed=seed + i)
+        s = new_game(n_players, n_removed=n_removed, rng=rng)
+        while not is_terminal(s):
+            if s.to_move == 0:
+                a = bot.act(info_from_state(s, n_removed=n_removed))
+            else:
+                a = heur(s)
+            s = step(s, a, rng)
+        sc = final_scores(s)
+        b_scores.append(sc[0])
+        h_total += sum(sc[1:]) / (n_players - 1)
+        if sc[0] <= min(sc[1:]):
+            b_wins += 1
+    b_mean = sum(b_scores) / n_games
+    b_var = sum((x - b_mean) ** 2 for x in b_scores) / n_games
+    return {
+        "bot_mean": b_mean,
+        "bot_stderr": math.sqrt(b_var / n_games),
+        "heuristic_mean": h_total / n_games,
+        "win_rate": b_wins / n_games,
+        "parity": 1.0 / n_players,
     }
 
 

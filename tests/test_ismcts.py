@@ -22,10 +22,12 @@ from nothanks.imperfect import (
     legal_actions,
 )
 from nothanks.ismcts import (
+    ISMCTSBot,
     heuristic_rollout,
     ismcts_action,
     ismcts_evaluate,
     make_ismcts_policy,
+    make_value_leaf,
 )
 from nothanks.solver import evaluate as solver_evaluate
 
@@ -128,3 +130,76 @@ def test_less_exploitable_than_pimc_under_hidden_cards():
     assert ismcts < pimc < heur
     assert ismcts == pytest.approx(belief.exploitability(
         info, make_ismcts_policy(n_iter=1500, c=1.5, seed=0))["total"])  # reproducible
+
+
+def test_value_leaf_is_honest_and_absolute_frame():
+    # The net leaf must return one score per seat in ABSOLUTE order (mover-frame
+    # prediction rolled by to_move) and be identical across worlds behind the
+    # same info set (it consumes public features only).
+    from nothanks.beliefnet import make_info_net, predict_info
+
+    net = make_info_net(2, hidden=8, seed=1)
+    info = _small_info([3, 4, 5, 6, 7, 8], n_removed=2)
+    leaf = make_value_leaf(net)
+    v = leaf(info, random.Random(0))
+    assert len(v) == 2
+
+    import numpy as np
+    want = np.roll(predict_info(net, info), info.to_move)
+    assert np.allclose(v, want)
+    # Pure function of the info set: a second call agrees (the rng is unused).
+    assert leaf(info, random.Random(99)) == v
+
+
+def test_ismcts_with_trained_value_leaf_finds_belief_optimum():
+    # The deployment path: train an info net on this configuration and use it as
+    # the search leaf. An *untrained* net leaf actively misleads the search here —
+    # biased leaf values do not wash out at these iteration counts — so the leaf
+    # must carry signal, which is exactly what training provides.
+    from nothanks.beliefnet import train_info
+
+    info = InfoSet(
+        chips=(1, 1), cards=(frozenset(), frozenset()), active=7, pot=2,
+        to_move=0, deck=UNIVERSE, n_removed=2,
+    )
+    assert belief.solve(info, {})[1] == "pass"
+    net = train_info(n_players=2, deck=sorted(UNIVERSE), n_removed=2,
+                     start_chips=2, iterations=25, games_per_iter=40,
+                     epochs_per_iter=2, hidden=32, heur_frac_start=1.0,
+                     heur_frac_end=0.5, target_refresh=3, seed=0)
+    leaf = make_value_leaf(net)
+    for seed in range(4):
+        assert ismcts_action(info, n_iter=800, evaluator=leaf,
+                             rng=random.Random(seed)) == "pass"
+
+
+def test_bot_reuses_its_tree_across_moves():
+    info = _small_info([3, 4, 5, 6, 7, 8], n_removed=2)
+    bot = ISMCTSBot(n_iter=200, seed=0)
+    a = bot.act(info)
+    assert a in legal_actions(info)
+    size_after_first = len(bot.tree)
+    assert size_after_first > 0
+    assert info in bot.tree
+
+    # Acting at a successor info set keeps the old statistics (warm start) and
+    # only grows the tree.
+    nxt = belief.apply_pass(info)
+    b = bot.act(nxt)
+    assert b in legal_actions(nxt)
+    assert info in bot.tree  # previous root still there
+    assert len(bot.tree) >= size_after_first
+
+
+def test_bot_forced_move_short_circuits():
+    info = InfoSet(
+        chips=(0, 2), cards=(frozenset(), frozenset()), active=5, pot=0,
+        to_move=0, deck=UNIVERSE, n_removed=2,
+    )
+
+    def boom(_info, _rng):
+        raise AssertionError("evaluator must not run for a forced move")
+
+    bot = ISMCTSBot(n_iter=50, evaluator=boom, seed=0)
+    assert bot.act(info) == "take"
+    assert bot.tree == {}

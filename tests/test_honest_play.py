@@ -97,8 +97,9 @@ def test_head_to_head_hidden_structure():
     from nothanks.train import head_to_head_hidden
 
     res = head_to_head_hidden(net, n_games=8, n_worlds=10)
-    assert set(res) == {"vnet_mean", "heuristic_mean", "win_rate", "parity"}
+    assert set(res) == {"vnet_mean", "vnet_stderr", "heuristic_mean", "win_rate", "parity"}
     assert 0.0 <= res["win_rate"] <= 1.0
+    assert res["vnet_stderr"] >= 0.0
     assert abs(res["parity"] - 1 / 3) < 1e-9
 
 

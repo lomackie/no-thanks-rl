@@ -7,6 +7,12 @@ expected score (a subgame-perfect solution). Because only one player moves at a
 time and chance events are explicit, this is well defined for any number of
 players — there is no 2-player-zero-sum requirement.
 
+Equilibrium selection caveat: with 3+ self-interested players, backward induction
+yields *a* subgame-perfect equilibrium under this implementation's tie-break
+(legal-action order — ``take`` before ``pass``). When a mover is indifferent,
+different tie-breaks can change the *other* players' values, so the equilibrium
+value vector is not unique; "optimal play" here always means this selection.
+
 Tractability: the state space explodes combinatorially, so this is only for
 *small* configurations (a reduced deck and few chips). Use it as an oracle to
 validate Monte-Carlo and learned evaluators, not to solve the full game.

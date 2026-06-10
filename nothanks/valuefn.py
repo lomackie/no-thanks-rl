@@ -34,14 +34,22 @@ from .features import feature_dim, features, seat_order
 
 
 class ValueNet:
-    """2-layer MLP: features -> (n_players,) expected final-score vector."""
+    """2-layer MLP: features -> (n_players,) expected final-score vector.
+
+    ``in_dim`` defaults to the god-view :func:`nothanks.features.feature_dim`;
+    pass :func:`nothanks.features.info_feature_dim` to build an **info-set** net
+    over public features instead (see :mod:`nothanks.beliefnet` — its helpers,
+    not :meth:`predict`, are the way to evaluate such a net).
+    """
 
     _PARAMS = ("W1", "b1", "W2", "b2")
 
-    def __init__(self, n_players: int, hidden: int = 64, seed: int = 0):
+    def __init__(self, n_players: int, hidden: int = 64, seed: int = 0,
+                 in_dim: int | None = None):
         self.n_players = n_players
         self.hidden = hidden
-        d = feature_dim(n_players)
+        self.in_dim = feature_dim(n_players) if in_dim is None else in_dim
+        d = self.in_dim
         rng = np.random.default_rng(seed)
         # He-ish init for the tanh layer; small head.
         self.W1 = rng.normal(0, np.sqrt(2.0 / d), size=(hidden, d)).astype(np.float64)
@@ -110,7 +118,7 @@ class ValueNet:
 
     def copy(self) -> "ValueNet":
         """A deep copy of the weights (fresh Adam state). Used as a target network."""
-        clone = ValueNet(self.n_players, hidden=self.hidden)
+        clone = ValueNet(self.n_players, hidden=self.hidden, in_dim=self.in_dim)
         for k in self._PARAMS:
             getattr(clone, k)[...] = getattr(self, k)
         clone._reset_adam()
@@ -121,6 +129,7 @@ class ValueNet:
             path,
             n_players=self.n_players,
             hidden=self.hidden,
+            in_dim=self.in_dim,
             W1=self.W1,
             b1=self.b1,
             W2=self.W2,
@@ -130,7 +139,8 @@ class ValueNet:
     @classmethod
     def load(cls, path) -> "ValueNet":
         d = np.load(path)
-        net = cls(int(d["n_players"]), int(d["hidden"]))
+        in_dim = int(d["in_dim"]) if "in_dim" in d.files else None
+        net = cls(int(d["n_players"]), int(d["hidden"]), in_dim=in_dim)
         net.W1, net.b1, net.W2, net.b2 = d["W1"], d["b1"], d["W2"], d["b2"]
         net._reset_adam()
         return net

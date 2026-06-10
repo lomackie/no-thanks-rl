@@ -162,9 +162,11 @@ def solve(info: InfoSet, memo: dict | None = None) -> tuple[tuple[float, ...], s
     """Self-interested optimal value vector and best action under hidden cards.
 
     Each mover minimises its *own* expected score assuming every future mover does
-    the same — the belief-game counterpart of :func:`nothanks.solver.solve`. Exact
-    only on small games. Returns ``(value_vector, best_action)`` (``best_action``
-    is ``None`` at a terminal info set).
+    the same — the belief-game counterpart of :func:`nothanks.solver.solve`, with
+    the same equilibrium-selection caveat (the tie-break picks *a* subgame-perfect
+    equilibrium; under indifference the value vector is not unique). Exact only on
+    small games. Returns ``(value_vector, best_action)`` (``best_action`` is
+    ``None`` at a terminal info set).
     """
     if memo is None:
         memo = {}

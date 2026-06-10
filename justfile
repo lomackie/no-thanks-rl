@@ -27,6 +27,14 @@ train:
 imperfect:
     uv run python -m nothanks.imperfect_demo
 
+# Engine-style EV eval of an arbitrary position (see `just eval --help`)
+eval *args:
+    uv run python -m nothanks.cli eval {{args}}
+
+# Train + save the honest info-set net (then `just eval --net models/...npz ...`)
+train-info *args:
+    uv run python -m nothanks.cli train {{args}}
+
 # Open a Python REPL with the project importable
 repl:
     uv run python

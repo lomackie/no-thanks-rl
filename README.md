@@ -2,9 +2,11 @@
 
 Tools for understanding the card game **No Thanks** — a game engine, an exact
 solver that acts as a ground-truth EV oracle on small configurations, a
-Monte-Carlo rollout evaluator that scales to the full 24-card removal deck, and a
-self-play (TD-λ) value function that gives fast, rollout-free evals and plays
-stronger than the heuristic baseline.
+Monte-Carlo rollout evaluator that scales to the full 24-card removal deck, a
+self-play (TD-λ) value function trained on public information only, and an
+Information-Set MCTS bot that combines the two — the strongest honest player
+here (win/tie ~85% vs the heuristic baseline), never peeking at the nine
+removed cards.
 
 The goal is a *chess-engine-style EV evaluator*: given a position, show the
 expected value of each move and the value of the state — not just a bot to play
@@ -36,6 +38,29 @@ just repl     # python REPL with the project importable
 
 Or without `just`: `uv sync`, `uv run pytest`, `uv run python -m nothanks.demo`.
 
+## Evaluate a position
+
+The point of the project: type in any position and get the per-move EV table.
+Holdings are `;`-separated per seat, comma lists with ranges:
+
+```sh
+just eval --chips 9,11,10 --cards "3-5,22;17;" --active 26 --pot 3 --to-move 0
+```
+
+The default method is IS-MCTS with honest heuristic playouts. Train the info-set
+value net once for stronger, faster evals, then pass it back in:
+
+```sh
+just train-info --out models/info_net_3p.npz
+just eval --net models/info_net_3p.npz --method net  --chips 9,11,10 \
+    --cards "3-5,22;17;" --active 26 --pot 3          # instant one-ply eval
+just eval --net models/info_net_3p.npz --chips 9,11,10 \
+    --cards "3-5,22;17;" --active 26 --pot 3          # IS-MCTS with the net leaf
+```
+
+Every method parses the position into an *info set* (public knowledge only), so
+nothing here can peek at the nine removed cards.
+
 ## Modules
 
 - `nothanks/engine.py` — game state, transitions, and run-aware scoring.
@@ -43,7 +68,8 @@ Or without `just`: `uv sync`, `uv run pytest`, `uv run python -m nothanks.demo`.
 - `nothanks/solver.py` — exact backward-induction EV oracle for small games.
 - `nothanks/montecarlo.py` — Monte-Carlo rollout EV evaluator for the full deck,
   plus an exact policy-evaluation counterpart that the sampler is validated against.
-- `nothanks/features.py` — mover-relative feature encoding of a state.
+- `nothanks/features.py` — mover-relative feature encodings: god-view (`features`)
+  and public info-set (`info_features`).
 - `nothanks/valuefn.py` — tiny NumPy MLP value function (vector-valued head) and
   the fast one-ply `evaluate_v` move eval.
 - `nothanks/train.py` — self-play TD(λ) training (heuristic→self-play curriculum
@@ -51,6 +77,15 @@ Or without `just`: `uv sync`, `uv run pytest`, `uv run python -m nothanks.demo`.
 - `nothanks/imperfect.py` — hidden removed cards: information sets, determinization,
   and PIMC move analysis wrapping any per-world evaluator.
 - `nothanks/exploit.py` — exact best-response / exploitability for the testbed.
+- `nothanks/belief.py` — the hidden game as a Markov game on info sets: exact
+  belief-correct policy evaluation, optimum, and exploitability.
+- `nothanks/ismcts.py` — Information-Set MCTS (fixes PIMC's strategy fusion), the
+  value-net leaf, and the deployable persistent-tree bot.
+- `nothanks/beliefnet.py` — info-set-native value net: honest self-play training on
+  the belief game, honest one-ply evals, no PIMC wrapper needed.
+- `nothanks/approx_br.py` — approximate best response: learned-exploitability
+  lower bounds that scale to the full game.
+- `nothanks/cli.py` — the position-input CLI (`just eval`, `just train-info`).
 - `nothanks/demo.py` — prints an engine-style exact evaluation of a tiny opening.
 - `nothanks/mc_demo.py` — Monte-Carlo eval demo (sampler vs. exact on a tiny game).
 - `nothanks/imperfect_demo.py` — determinized (PIMC) eval + exploitability demo.
