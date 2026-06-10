@@ -1,0 +1,17 @@
+[project]
+name = "nothanks-rl"
+version = "0.1.0"
+description = "No Thanks game engine, exact solver, and EV analysis"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["nothanks"]
