@@ -121,6 +121,20 @@ def pile_remaining(info: InfoSet) -> int:
     return (len(info.deck) - info.n_removed) - len(seen(info))
 
 
+def legal_actions(info: InfoSet) -> tuple[str, ...]:
+    """The mover's legal actions, derivable from *public* knowledge alone.
+
+    Mirrors :func:`nothanks.engine.legal_actions` but reads the :class:`InfoSet`:
+    the action set depends only on the face-up card and the mover's chip count,
+    both of which are public, so it is identical in every determinized world.
+    """
+    if info.active is None:
+        return ()
+    if info.chips[info.to_move] > 0:
+        return ("take", "pass")
+    return ("take",)  # a chipless player is forced to take
+
+
 def determinize(info: InfoSet, rng: random.Random) -> State:
     """Sample one consistent world: a concrete :class:`State` with a guessed pile.
 
@@ -208,3 +222,32 @@ def evaluate_determinized(
         "pile_remaining": pile_remaining(info),
         "n_hidden": len(unseen(info)),
     }
+
+
+def determinized_action(
+    info: InfoSet,
+    evaluator: Evaluator,
+    n_worlds: int = 200,
+    rng: random.Random | None = None,
+) -> str:
+    """The **honest** playing policy: pick a move from public information only.
+
+    This is the non-cheating counterpart to :func:`nothanks.valuefn.greedy_action`,
+    which reads the god-view ``State`` (and so its ``remaining`` pile, revealing
+    which cards were removed). Here the input is an :class:`InfoSet`, so the
+    removed cards are *never* inspected: the move is chosen by PIMC — averaging
+    ``evaluator`` over worlds consistent with the public record
+    (:func:`evaluate_determinized`) and taking the action that minimises the
+    mover's own expected final score.
+
+    Because the decision is a pure function of ``info`` (plus ``rng``), two
+    distinct god-view states that share an info set — i.e. differ only in which
+    nine cards are hidden — yield the *same* action. Forced moves are returned
+    directly, with no sampling.
+    """
+    acts = legal_actions(info)
+    if not acts:
+        raise ValueError("terminal info set has no action to choose")
+    if len(acts) == 1:
+        return acts[0]
+    return evaluate_determinized(info, evaluator, n_worlds=n_worlds, rng=rng)["best_action"]

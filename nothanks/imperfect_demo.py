@@ -1,11 +1,16 @@
-"""Step 4 demo: hidden removed cards via determinization, plus exploitability.
+"""Steps 4–5 demo: hidden removed cards via determinization, plus exploitability.
 
-Three parts:
+Five parts:
   1. consistency — with nothing removed, determinized eval == direct exact eval;
   2. PIMC — a mid-game full standard position (9 cards genuinely hidden) analysed
      by determinized Monte-Carlo, with per-move EV ± across-world stderr;
-  3. exploitability — on a tiny game, the optimal policy is unexploitable while
-     the heuristic leaves a best-responder some gain.
+  3. exploitability (perfect-info testbed) — on a tiny no-removal game, the optimal
+     policy is unexploitable while the heuristic leaves a best-responder some gain;
+  4. exploitability under hidden cards — the belief-correct best response (it acts
+     on info sets, never the removed cards) on a tiny game with cards removed;
+  5. IS-MCTS vs PIMC — the single info-set search tree is less exploitable than
+     PIMC (even with PIMC handed an exact per-world leaf), quantifying the
+     strategy-fusion gap belief.py can now measure.
 
 Run with ``just imperfect`` (or ``python -m nothanks.imperfect_demo``).
 """
@@ -14,16 +19,19 @@ from __future__ import annotations
 
 import random
 
+from . import belief
 from .engine import full_deck, initial_state, is_terminal, new_game, step
 from .exploit import exploitability, optimal_policy
 from .heuristic import heuristic_action
 from .imperfect import (
     determinize,
+    determinized_action,
     evaluate_determinized,
     info_from_state,
     pile_remaining,
     unseen,
 )
+from .ismcts import make_ismcts_policy
 from .montecarlo import evaluate_mc
 from .solver import evaluate as solver_evaluate
 
@@ -85,10 +93,66 @@ def _demo_exploitability() -> None:
     print("   -> optimal is its own best response (≈0); the heuristic is exploitable")
 
 
+def _demo_belief_exploitability() -> None:
+    print("\n4. exploitability under HIDDEN cards — best response acts on info sets")
+    deck = [3, 4, 5, 6, 7, 8]
+    s = initial_state(2, deck, start_chips=2)
+    info = info_from_state(s, n_removed=2, deck=frozenset(deck))
+    print(f"   deck {deck}, {info.n_players} players, 2 of {len(unseen(info))} unseen"
+          f" cards removed & hidden ({pile_remaining(info)} in the pile)")
+
+    exp_h = belief.exploitability(info, belief.make_heuristic_policy(0))
+    exp_o = belief.exploitability(info, belief.optimal_policy())
+    print(f"   heuristic : base {tuple(round(x,2) for x in exp_h['base'])}"
+          f"  gain/seat {tuple(round(x,2) for x in exp_h['gain'])}"
+          f"  total {exp_h['total']:.2f}")
+    print(f"   optimal   : base {tuple(round(x,2) for x in exp_o['base'])}"
+          f"  gain/seat {tuple(round(x,3) for x in exp_o['gain'])}"
+          f"  total {exp_o['total']:.2f}")
+    print("   -> the belief best-responder never sees the removed cards; the belief"
+          " optimum is still unexploitable (≈0), the heuristic still leaks")
+
+
+def _demo_ismcts_vs_pimc() -> None:
+    print("\n5. IS-MCTS vs PIMC — a single info-set tree beats per-world solving")
+    import random
+
+    deck = [3, 4, 5, 6, 7]
+    s = initial_state(2, deck, start_chips=2)
+    info = info_from_state(s, n_removed=1, deck=frozenset(deck))
+    print(f"   deck {deck}, {info.n_players} players, 1 of {len(unseen(info))} unseen"
+          f" cards removed & hidden ({pile_remaining(info)} in the pile)")
+
+    # PIMC is handed the *strongest* per-world leaf (the exact solver), so its
+    # residual exploitability is pure strategy fusion. Seed both from the info set
+    # so the comparison is deterministic.
+    def pimc_policy(i):
+        return determinized_action(
+            i, solver_evaluate, n_worlds=8, rng=random.Random(hash((0, i)))
+        )
+
+    ismcts = make_ismcts_policy(n_iter=1500, c=1.5, seed=0)
+
+    exp_h = belief.exploitability(info, belief.make_heuristic_policy(0))
+    exp_p = belief.exploitability(info, pimc_policy)
+    exp_i = belief.exploitability(info, ismcts)
+    exp_o = belief.exploitability(info, belief.optimal_policy())
+    print(f"   heuristic       : total {exp_h['total']:.3f}")
+    print(f"   PIMC (solver)   : total {exp_p['total']:.3f}"
+          f"  gain/seat {tuple(round(x, 3) for x in exp_p['gain'])}")
+    print(f"   IS-MCTS         : total {exp_i['total']:.3f}"
+          f"  gain/seat {tuple(round(x, 3) for x in exp_i['gain'])}")
+    print(f"   belief optimum  : total {exp_o['total']:.3f}")
+    print("   -> IS-MCTS undercuts PIMC's strategy-fusion floor, toward the"
+          " unexploitable belief optimum")
+
+
 def main() -> None:
     _demo_consistency()
     _demo_pimc()
     _demo_exploitability()
+    _demo_belief_exploitability()
+    _demo_ismcts_vs_pimc()
 
 
 if __name__ == "__main__":

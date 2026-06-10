@@ -30,7 +30,8 @@ import numpy as np
 from .engine import State, final_scores, is_terminal, legal_actions, new_game, step
 from .features import features, seat_order
 from .heuristic import heuristic_action
-from .valuefn import ValueNet, greedy_action
+from .imperfect import determinized_action, info_from_state
+from .valuefn import ValueNet, evaluate_v, greedy_action
 
 # A behaviour policy decides the move actually played during self-play. It sees
 # the net so it can be greedy-on-net, heuristic, or any mix.
@@ -284,6 +285,66 @@ def net_vs_net(
     }
 
 
+def pimc_policy(net: ValueNet, n_removed: int = 9, n_worlds: int = 100):
+    """The deployable, **non-cheating** bot: greedy(net) wrapped in PIMC.
+
+    The plain :func:`nothanks.valuefn.greedy_action` reads the god-view ``State``
+    (and so the true pile, which reveals the removed cards). This wrapper instead
+    projects the referee's state onto the mover's :class:`~nothanks.imperfect.InfoSet`
+    — dropping the pile's identity — and chooses by determinized lookahead over
+    worlds consistent with public knowledge only. The returned ``policy(s, rng)``
+    therefore never depends on which cards were removed.
+
+    With ``n_removed == 0`` nothing is hidden and it reduces to plain greedy(net).
+    """
+    evaluator = lambda st: evaluate_v(st, net)  # noqa: E731
+
+    def policy(s: State, rng: random.Random) -> str:
+        info = info_from_state(s, n_removed=n_removed)
+        return determinized_action(info, evaluator, n_worlds=n_worlds, rng=rng)
+
+    return policy
+
+
+def head_to_head_hidden(
+    net: ValueNet,
+    n_games: int = 300,
+    seed: int = 20_000,
+    n_removed: int = 9,
+    n_worlds: int = 80,
+) -> dict:
+    """Like :func:`head_to_head`, but the net plays from public info only (PIMC).
+
+    Seat 0 is the honest PIMC bot; the other seats follow the heuristic (which is
+    already a function of public state). Because the bot never sees the removed
+    cards, this is the fair measure of its *real* playing strength. Slower than
+    :func:`head_to_head`: every bot move averages over ``n_worlds`` determinized
+    worlds, so keep ``n_games``/``n_worlds`` modest.
+    """
+    n = net.n_players
+    bot = pimc_policy(net, n_removed=n_removed, n_worlds=n_worlds)
+    heur = lambda s: heuristic_action(s, 0)  # noqa: E731
+    v_total = h_total = 0.0
+    v_wins = 0
+    for i in range(n_games):
+        rng = random.Random(seed + i)
+        s = new_game(n, n_removed=n_removed, rng=rng)
+        while not is_terminal(s):
+            a = bot(s, rng) if s.to_move == 0 else heur(s)
+            s = step(s, a, rng)
+        sc = final_scores(s)
+        v_total += sc[0]
+        h_total += sum(sc[1:]) / (n - 1)
+        if sc[0] <= min(sc[1:]):
+            v_wins += 1
+    return {
+        "vnet_mean": v_total / n_games,
+        "heuristic_mean": h_total / n_games,
+        "win_rate": v_wins / n_games,
+        "parity": 1.0 / n,
+    }
+
+
 def _demo() -> None:
     """Train a heuristic-only baseline and a self-play net; show self-play wins."""
     from .valuefn import evaluate_v
@@ -319,6 +380,15 @@ def _demo() -> None:
     nvn = net_vs_net(sp, base, n_games=800)
     print(f"  self-play {nvn['a_mean']:.2f}  vs  baseline {nvn['b_mean']:.2f}"
           f"   self-play win/tie {nvn['a_win_rate']:.1%}  (parity ≈ {nvn['parity']:.0%})")
+
+    # The graders above hand the net the god-view state (it sees the removed
+    # cards). The deployable bot must not: head_to_head_hidden plays the net via
+    # PIMC on its info set only, so its move never depends on the hidden nine.
+    print("\nhonest bot — net via PIMC (public info only) vs heuristic (no cheating):")
+    hid = head_to_head_hidden(sp, n_games=200, n_worlds=80)
+    print(f"  self-play (PIMC) {hid['vnet_mean']:.2f}  vs  heuristic"
+          f" {hid['heuristic_mean']:.2f}   win/tie {hid['win_rate']:.1%}"
+          f"  (parity ≈ {hid['parity']:.0%})")
 
 
 if __name__ == "__main__":

@@ -17,12 +17,16 @@ from .engine import (
 from .imperfect import (
     InfoSet,
     determinize,
+    determinized_action,
     evaluate_determinized,
     info_from_state,
     pile_remaining,
     unseen,
 )
 from .exploit import best_response_value, exploitability, optimal_policy
+from . import belief
+from . import ismcts
+from .ismcts import ismcts_action, ismcts_evaluate, make_ismcts_policy
 
 __all__ = [
     "State",
@@ -39,6 +43,7 @@ __all__ = [
     "is_terminal",
     "InfoSet",
     "determinize",
+    "determinized_action",
     "evaluate_determinized",
     "info_from_state",
     "pile_remaining",
@@ -46,4 +51,9 @@ __all__ = [
     "best_response_value",
     "exploitability",
     "optimal_policy",
+    "belief",
+    "ismcts",
+    "ismcts_action",
+    "ismcts_evaluate",
+    "make_ismcts_policy",
 ]
