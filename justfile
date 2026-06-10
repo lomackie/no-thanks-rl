@@ -15,6 +15,14 @@ test *args:
 demo:
     uv run python -m nothanks.demo
 
+# Monte-Carlo eval: tiny-game sanity check + a full 24-card opening
+mc-demo:
+    uv run python -m nothanks.mc_demo
+
+# Train a self-play value net (TD-λ), show an eval, and grade it vs the heuristic
+train:
+    uv run python -m nothanks.train
+
 # Open a Python REPL with the project importable
 repl:
     uv run python
