@@ -70,7 +70,7 @@ class GameSession:
     human_seat: int
     bots: list[ISMCTSBot | None]
     rng: random.Random
-    n_iter: int = 400
+    n_iter: int = 2000
     leaf: LeafEvaluator | None = None
     hints: bool = True
     log: list[dict] = field(default_factory=list)
@@ -82,7 +82,7 @@ class AdvisorSession:
 
     history: list[InfoSet]
     advised_seat: int
-    n_iter: int = 400
+    n_iter: int = 2000
     leaf: LeafEvaluator | None = None
 
     @property
@@ -222,7 +222,7 @@ def _run_ai_turns(session: GameSession) -> list[dict]:
 class NewGameRequest(BaseModel):
     n_players: int = 3
     human_seat: int | None = None  # None = random
-    n_iter: int = 400
+    n_iter: int = 2000
     n_removed: int = 9
     seed: int | None = None
     hints: bool = True  # per-move EV + projected scores on human turns
@@ -239,7 +239,7 @@ class AdvisorNewRequest(BaseModel):
     advised_seat: int = 0
     first_card: int
     start_chips: int | None = None  # None = the rulebook count for n_players
-    n_iter: int = 400
+    n_iter: int = 2000
 
 
 class AdvisorMoveRequest(BaseModel):

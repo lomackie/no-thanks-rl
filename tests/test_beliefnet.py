@@ -169,6 +169,65 @@ def test_exploring_deviation_returns_post_deviation_suffix():
     assert np.all(np.isfinite(predict_info(trained, _midgame_info())))
 
 
+def _always_pass_behavior(info, net, rng, eps):
+    acts = legal_actions(info)
+    return "pass" if "pass" in acts else acts[0]
+
+
+def test_take_deviation_forces_a_take_at_a_cheap_opportunity():
+    # Under an always-pass behavior the mover sequence is 0,1,2,... — a take is
+    # the only way the same seat moves twice in a row this early. Forcing the
+    # take-deviation at the first cheap opportunity (margin huge => the first
+    # free decision) must drop the prefix incl. the forced step, so the suffix
+    # opens with the taker moving again.
+    net = make_info_net(3, hidden=8, seed=4)
+    full = selfplay_belief_game(net, random.Random(0), eps=0.0,
+                                behavior=_always_pass_behavior)
+    assert [st.mover for st in full[:3]] == [0, 1, 2]
+
+    dev = selfplay_belief_game(net, random.Random(0), eps=0.0,
+                               behavior=_always_pass_behavior,
+                               deviate_take_at=0, take_margin=100)
+    assert dev and dev[0].mover == 0  # take retains the turn
+    assert dev[-1].final_abs is not None
+    assert all(st.final_abs is None for st in dev[:-1])
+
+    # No opportunity ever qualifies at an impossible margin: game untouched.
+    same = selfplay_belief_game(net, random.Random(0), eps=0.0,
+                                behavior=_always_pass_behavior,
+                                deviate_take_at=0, take_margin=-1000)
+    assert len(same) == len(full)
+    # An index past the game's opportunities also leaves it untouched.
+    same2 = selfplay_belief_game(net, random.Random(0), eps=0.0,
+                                 behavior=_always_pass_behavior,
+                                 deviate_take_at=10_000, take_margin=100)
+    assert len(same2) == len(full)
+
+
+def test_train_info_take_deviations_and_psearch_run_end_to_end():
+    # The step-19 mechanisms: take-biased deviations + the playout-leaf search
+    # band, on a tiny deck, sequential and pooled.
+    kwargs = dict(n_players=3, deck=[3, 4, 5, 6, 7], n_removed=1, start_chips=2,
+                  iterations=2, games_per_iter=8, epochs_per_iter=1,
+                  take_dev_frac=0.6, take_dev_horizon=4, take_dev_margin=2,
+                  psearch_frac_start=0.5, psearch_frac_end=0.5,
+                  heur_frac_start=0.3, heur_frac_end=0.3,
+                  search_iters=8, search_c=1.5, seed=0)
+    net = train_info(**kwargs)
+    assert np.all(np.isfinite(predict_info(net, _midgame_info())))
+    # Pool path: deterministic and worker-count invariant with the new specs.
+    a = train_info(n_jobs=2, **kwargs)
+    b = train_info(n_jobs=3, **kwargs)
+    assert np.array_equal(a.W1, b.W1) and np.array_equal(a.W2, b.W2)
+
+    # The playout-leaf search behavior is legal and net-independent.
+    from nothanks.beliefnet import make_search_info_behavior
+    info = new_belief_game(3, deck=[3, 4, 5, 6, 7], n_removed=1, start_chips=2,
+                           rng=random.Random(1))
+    behavior = make_search_info_behavior(n_iter=8, c=1.5, leaf="playout")
+    assert behavior(info, net, random.Random(0), 0.0) in legal_actions(info)
+
+
 def test_train_info_n_jobs_is_deterministic_and_worker_count_invariant():
     # The pool draws per-game seeds in the parent and chunks contiguously, so
     # the trained net must be identical for any n_jobs > 1.
@@ -211,11 +270,17 @@ def test_train_info_search_curriculum_runs_and_search_behavior_is_legal():
 
 
 def test_repaired_net_takes_the_gapped_high_card_smoke_position():
-    # Roadmap step 16's regression: the step-12 adjudication proved *take* is
-    # right here (5.9 ± 1.3 by 500 paired all-IS-MCTS playouts), and the
-    # original info net said pass by ~5 — the gapped-high-card take bias. The
-    # shipped repaired net (search-curriculum training, scripts/
-    # step16_train_v2.py) must keep this position flipped.
+    # Roadmap step 16's regression: the step-12 adjudication said *take* here
+    # (5.9 ± 1.3 by 500 paired all-IS-MCTS playouts), and the original info
+    # net said pass by ~5 — the gapped-high-card take bias. The v2 net
+    # (scripts/step16_train_v2.py) must keep this position flipped.
+    #
+    # Historical note (step 19): re-adjudicating under stronger continuation
+    # bots weakened and then *inverted* the verdict (v2-leaf bots: pass by
+    # 1.4 ± 1.9; v3-leaf bots: pass by 4.7 ± 1.4 —
+    # scripts/adjudicate_smoke16_revisit.py). The position's answer is
+    # opponent-model-dependent; this test pins the v2 *file* as a record of
+    # what step 16 fixed, and the v3 net is intentionally NOT held to it.
     import pathlib
 
     import pytest
@@ -234,6 +299,70 @@ def test_repaired_net_takes_the_gapped_high_card_smoke_position():
         deck=frozenset(full_deck()), n_removed=9,
     )
     assert greedy_info_action(smoke, net) == "take"
+
+
+def test_v3_net_search_takes_the_opening_3_smoke_position():
+    # Roadmap step 19's regression: paired all-IS-MCTS playouts proved *take*
+    # is right on the opening 3 for 2 chips (8.15 ± 1.76,
+    # scripts/adjudicate_opening3.py), and the v2 net leaf made the search
+    # prefer pass at any budget (every leaf of the take subtree is a
+    # "mover owns a cheap anchor" state the net undervalued). The shipped v3
+    # net (scripts/step19_train_v3.py) must keep the search flipped.
+    import pathlib
+
+    import pytest
+
+    from nothanks.engine import full_deck
+    from nothanks.ismcts import ismcts_evaluate, make_value_leaf
+    from nothanks.valuefn import ValueNet
+
+    path = pathlib.Path(__file__).parent.parent / "models" / "info_net_3p_v3.npz"
+    if not path.exists():  # models/ is gitignored; only trained checkouts have it
+        pytest.skip("no local v3 net (train with scripts/step19_train_v3.py)")
+    net = ValueNet.load(path)
+    opening3 = InfoSet(
+        chips=(11, 10, 10),
+        cards=(frozenset(), frozenset(), frozenset()),
+        active=3, pot=2, to_move=0,
+        deck=frozenset(full_deck()), n_removed=9,
+    )
+    ev = ismcts_evaluate(opening3, n_iter=2000, evaluator=make_value_leaf(net),
+                         c=30.0, rng=random.Random(1))
+    assert ev["best_action"] == "take"
+
+
+def test_5p_net_takes_the_run_connecting_8_smoke_position():
+    # The 5p instance of the same bias family (user-reported board): mover
+    # holds 9,10 — taking the face-up 8 *improves* the run score by 1, yet the
+    # shipped first-generation 5p net said pass one-ply by ~5 points. Any
+    # future replacement 5p net must say take.
+    #
+    # Step 19's first retrain attempt fixed this position but regressed the
+    # anchor-3 smoke and lost both arenas, so it was rejected and no
+    # ``info_net_5p_v2.npz`` ships — this test stays dormant until a retrain
+    # passes the gates (scripts/step19_grade_45p.py). At deployment the
+    # position is covered anyway: the 2000-iteration search over the shipped
+    # net flips it to take.
+    import pathlib
+
+    import pytest
+
+    from nothanks.engine import full_deck
+    from nothanks.valuefn import ValueNet
+
+    path = pathlib.Path(__file__).parent.parent / "models" / "info_net_5p_v2.npz"
+    if not path.exists():  # not yet retrained on this checkout
+        pytest.skip("no local repaired 5p net (train with scripts/step19_train_v3.py's recipe)")
+    net = ValueNet.load(path)
+    board = InfoSet(
+        chips=(10, 20, 1, 24, 0),
+        cards=(frozenset({9, 10, 27, 28}), frozenset({3, 4, 12, 35}),
+               frozenset({5, 19}), frozenset({15, 16, 24, 31, 32}),
+               frozenset({6, 7, 13, 14})),
+        active=8, pot=0, to_move=0,
+        deck=frozenset(full_deck()), n_removed=9,
+    )
+    assert greedy_info_action(board, net) == "take"
 
 
 def test_trained_info_net_is_gradeable_and_learns_on_tiny_game():

@@ -43,7 +43,7 @@ from .belief import (
     is_terminal,
     take_outcomes,
 )
-from .engine import STARTING_CHIPS, full_deck, new_game
+from .engine import STARTING_CHIPS, full_deck, new_game, score_delta
 from .engine import final_scores as state_final_scores
 from .engine import is_terminal as state_is_terminal
 from .engine import step as state_step
@@ -66,13 +66,16 @@ _MODELS_DIR = pathlib.Path(__file__).resolve().parent.parent / "models"
 def default_net_path(n_players: int) -> pathlib.Path | None:
     """The conventionally-named saved info net for a player count, if any.
 
-    ``models/info_net_{n}p_v2.npz`` — the search-curriculum repair of roadmap
-    step 16 — is preferred over ``models/info_net_{n}p.npz`` (the 3p original
-    is kept under its old name as the historical reference the step-11..14
-    scripts measured). ``None`` when no saved net exists for this player count,
-    in which case callers fall back to the heuristic-playout leaf.
+    Newest generation first: ``_v3`` (the cheap-anchor-take repair of roadmap
+    step 19) over ``_v2`` (the gapped-high-card repair of step 16) over the
+    base name (the 3p original, kept as the historical reference the
+    step-11..14 scripts measured). ``None`` when no saved net exists for this
+    player count, in which case callers fall back to the heuristic-playout
+    leaf.
     """
-    for name in (f"info_net_{n_players}p_v2.npz", f"info_net_{n_players}p.npz"):
+    for name in (f"info_net_{n_players}p_v3.npz",
+                 f"info_net_{n_players}p_v2.npz",
+                 f"info_net_{n_players}p.npz"):
         path = _MODELS_DIR / name
         if path.exists():
             return path
@@ -228,9 +231,10 @@ def heuristic_info_behavior(info: InfoSet, net: ValueNet, rng: random.Random, ep
 class _SearchInfoBehavior:
     """Callable (hence picklable) form of :func:`make_search_info_behavior`."""
 
-    def __init__(self, n_iter: int, c: float):
+    def __init__(self, n_iter: int, c: float, leaf: str = "net"):
         self.n_iter = n_iter
         self.c = c
+        self.leaf = leaf
 
     def __call__(self, info: InfoSet, net: ValueNet, rng: random.Random, eps: float) -> str:
         from .ismcts import ismcts_action, make_value_leaf
@@ -240,11 +244,13 @@ class _SearchInfoBehavior:
             return actions[0]
         if rng.random() < eps:
             return rng.choice(actions)
+        evaluator = make_value_leaf(net) if self.leaf == "net" else None
         return ismcts_action(info, n_iter=self.n_iter,
-                             evaluator=make_value_leaf(net), c=self.c, rng=rng)
+                             evaluator=evaluator, c=self.c, rng=rng)
 
 
-def make_search_info_behavior(n_iter: int = 200, c: float = 30.0) -> InfoBehavior:
+def make_search_info_behavior(n_iter: int = 200, c: float = 30.0,
+                              leaf: str = "net") -> InfoBehavior:
     """ε-greedy on an IS-MCTS move with the *current* net as leaf.
 
     The expert-iteration data policy (roadmap step 16): games played by the
@@ -253,8 +259,15 @@ def make_search_info_behavior(n_iter: int = 200, c: float = 30.0) -> InfoBehavio
     where one-ply lookahead and the search disagree (the gapped-high-card take
     bias is exactly such a class). Expensive (~one search per decision), so it
     is annealed in via ``search_frac`` rather than used for every game.
+
+    ``leaf="playout"`` searches over the honest heuristic playout instead of
+    the net (roadmap step 19). A net-leaf searcher inherits the net's own
+    state-value biases, so its games cannot correct them; the playout leaf is
+    independent of the net and plays the cheap-anchor takes correctly, making
+    its games the corrective trajectories. Slower (a full playout per search
+    iteration), so it gets its own smaller band (``psearch_frac``).
     """
-    return _SearchInfoBehavior(n_iter, c)
+    return _SearchInfoBehavior(n_iter, c, leaf)
 
 
 def selfplay_belief_game(
@@ -266,6 +279,8 @@ def selfplay_belief_game(
     n_removed: int = 9,
     start_chips: int | None = None,
     deviate_at: int | None = None,
+    deviate_take_at: int | None = None,
+    take_margin: int = 2,
 ) -> list[_Step]:
     """Play one belief game under ``behavior``; return its decision steps.
 
@@ -283,11 +298,23 @@ def selfplay_belief_game(
     before the ``deviate_at``-th free decision the whole game is returned (it
     was an ordinary on-policy game). May return ``[]`` when the deviation was
     the final decision.
+
+    ``deviate_take_at`` is the **take-biased** variant (roadmap step 19): the
+    forced action is ``take``, at the ``deviate_take_at``-th *cheap-take
+    opportunity* — a free decision where ``score_delta(active) − pot ≤
+    take_margin``. Uniform deviations rarely land on these decisions *and*
+    pick take, so the net never sees competent play after owning a cheap run
+    anchor (e.g. the opening 3 for 2 chips) and learns to undervalue those
+    states — a bias the search then inherits through every leaf of the take
+    subtree, where no iteration budget can fix it. Same suffix-only training,
+    so the calibration property is unchanged. At most one of ``deviate_at`` /
+    ``deviate_take_at`` should be set.
     """
     info = new_belief_game(net.n_players, deck=deck, n_removed=n_removed,
                            start_chips=start_chips, rng=rng)
     steps: list[_Step] = []
     n_free = 0
+    n_cheap = 0
     cut = -1
     while not is_terminal(info):
         feat = info_features(info)
@@ -296,6 +323,14 @@ def selfplay_belief_game(
         if deviate_at is not None and len(acts) > 1 and n_free == deviate_at:
             a = rng.choice(acts)
             cut = len(steps)  # drop this step and everything before it
+        elif (deviate_take_at is not None and len(acts) > 1
+              and score_delta(info.cards[mover], info.active) - info.pot <= take_margin):
+            if n_cheap == deviate_take_at:
+                a = "take"
+                cut = len(steps)
+            else:
+                a = behavior(info, net, rng, eps)
+            n_cheap += 1
         else:
             a = behavior(info, net, rng, eps)
         if len(acts) > 1:
@@ -308,12 +343,16 @@ def selfplay_belief_game(
 
 
 def _pick_behavior(u: float, heur_frac: float, search_frac: float,
-                   search_behavior: InfoBehavior) -> InfoBehavior:
-    """The curriculum draw: heuristic / search / greedy by one uniform sample."""
+                   search_behavior: InfoBehavior, psearch_frac: float = 0.0,
+                   psearch_behavior: InfoBehavior | None = None) -> InfoBehavior:
+    """The curriculum draw: heuristic / search / playout-search / greedy by one
+    uniform sample (band order keeps the historical map when the new band is 0)."""
     if u < heur_frac:
         return heuristic_info_behavior
     if u < heur_frac + search_frac:
         return search_behavior
+    if u < heur_frac + search_frac + psearch_frac:
+        return psearch_behavior
     return greedy_info_behavior
 
 
@@ -326,12 +365,14 @@ def _selfplay_batch(args) -> list:
     chunks the spec list contiguously and concatenates results in order)
     independent of the worker count.
     """
-    net, specs, eps, deck, n_removed, start_chips = args
+    net, specs, eps, deck, n_removed, start_chips, take_margin = args
     return [
         selfplay_belief_game(net, random.Random(game_seed), eps, behavior,
                              deck=deck, n_removed=n_removed,
-                             start_chips=start_chips, deviate_at=deviate_at)
-        for game_seed, behavior, deviate_at in specs
+                             start_chips=start_chips, deviate_at=deviate_at,
+                             deviate_take_at=deviate_take_at,
+                             take_margin=take_margin)
+        for game_seed, behavior, deviate_at, deviate_take_at in specs
     ]
 
 
@@ -351,8 +392,13 @@ def train_info(
     search_frac_end: float = 0.0,
     search_iters: int = 200,
     search_c: float = 30.0,
+    psearch_frac_start: float = 0.0,
+    psearch_frac_end: float = 0.0,
     deviation_frac: float = 0.0,
     deviation_horizon: int = 30,
+    take_dev_frac: float = 0.0,
+    take_dev_horizon: int = 8,
+    take_dev_margin: int = 2,
     target_refresh: int = 1,
     hidden: int = 64,
     deck=None,
@@ -380,6 +426,14 @@ def train_info(
     split between the heuristic and greedy self-play as before. Requires
     ``heur_frac + search_frac ≤ 1`` throughout.
 
+    ``psearch_frac`` (annealed like the others; roadmap step 19) is a second
+    search band whose games are played by IS-MCTS over the **heuristic-playout
+    leaf** instead of the net. The net-leaf searcher inherits the net's own
+    state-value biases (step 16's lesson), so its games can't correct them;
+    the playout leaf is independent of the net and supplies corrective
+    trajectories for the classes the net mis-values (cheap-anchor takes).
+    Requires ``heur_frac + search_frac + psearch_frac ≤ 1`` throughout.
+
     ``deviation_frac`` of games carry one **exploring deviation** (see
     :func:`selfplay_belief_game`): a single uniform-random action at a uniform
     free-decision index in ``[0, deviation_horizon)``, with only the
@@ -387,6 +441,13 @@ def train_info(
     *not* inflate the value scale — sustained ε does, and a value net used as a
     search leaf must stay calibrated against the true terminal scores it is
     mixed with inside the tree.
+
+    ``take_dev_frac`` of the *remaining* games carry a **take-biased
+    deviation** instead (step 19, see :func:`selfplay_belief_game`): a forced
+    ``take`` at a uniform cheap-take-opportunity index in
+    ``[0, take_dev_horizon)`` (cheap = ``score_delta − pot ≤ take_dev_margin``).
+    The two kinds are mutually exclusive per game, so the effective take-share
+    is ``(1 − deviation_frac) · take_dev_frac``.
 
     ``n_jobs > 1`` farms game generation (the wall-clock bottleneck, especially
     the search games) out to a process pool; the SGD fit stays in the parent.
@@ -400,6 +461,8 @@ def train_info(
     rng = random.Random(seed)
     np_rng = np.random.default_rng(seed)
     search_behavior = make_search_info_behavior(n_iter=search_iters, c=search_c)
+    psearch_behavior = make_search_info_behavior(n_iter=search_iters, c=search_c,
+                                                 leaf="playout")
     pool = None
     if n_jobs > 1:
         from concurrent.futures import ProcessPoolExecutor
@@ -412,40 +475,48 @@ def train_info(
             eps = eps_start + (eps_end - eps_start) * frac
             heur_frac = heur_frac_start + (heur_frac_end - heur_frac_start) * frac
             search_frac = search_frac_start + (search_frac_end - search_frac_start) * frac
+            psearch_frac = psearch_frac_start + (psearch_frac_end - psearch_frac_start) * frac
 
             if it % target_refresh == 0:
                 target = net.copy()
 
-            def draw_deviation() -> int | None:
+            def draw_deviation() -> tuple[int | None, int | None]:
                 # No rng draw at all when off: keeps the historical stream.
                 if deviation_frac > 0.0 and rng.random() < deviation_frac:
-                    return rng.randrange(deviation_horizon)
-                return None
+                    return rng.randrange(deviation_horizon), None
+                if take_dev_frac > 0.0 and rng.random() < take_dev_frac:
+                    return None, rng.randrange(take_dev_horizon)
+                return None, None
 
             if pool is None:
                 games = []
                 for _ in range(games_per_iter):
                     behavior = _pick_behavior(rng.random(), heur_frac,
-                                              search_frac, search_behavior)
+                                              search_frac, search_behavior,
+                                              psearch_frac, psearch_behavior)
+                    deviate_at, deviate_take_at = draw_deviation()
                     games.append(
                         selfplay_belief_game(net, rng, eps, behavior, deck=deck,
                                              n_removed=n_removed,
                                              start_chips=start_chips,
-                                             deviate_at=draw_deviation())
+                                             deviate_at=deviate_at,
+                                             deviate_take_at=deviate_take_at,
+                                             take_margin=take_dev_margin)
                     )
             else:
                 specs = [
                     (rng.randrange(1 << 62),
                      _pick_behavior(rng.random(), heur_frac, search_frac,
-                                    search_behavior),
-                     draw_deviation())
+                                    search_behavior, psearch_frac,
+                                    psearch_behavior),
+                     *draw_deviation())
                     for _ in range(games_per_iter)
                 ]
                 chunk = -(-len(specs) // n_jobs)  # contiguous => order-stable
                 futures = [
                     pool.submit(_selfplay_batch,
                                 (net, specs[i:i + chunk], eps, deck,
-                                 n_removed, start_chips))
+                                 n_removed, start_chips, take_dev_margin))
                     for i in range(0, len(specs), chunk)
                 ]
                 games = [g for f in futures for g in f.result()]
@@ -463,7 +534,8 @@ def train_info(
 
             if log:
                 print(f"iter {it:3d}  eps {eps:.2f}  heur {heur_frac:.2f}  "
-                      f"search {search_frac:.2f}  steps {len(X):5d}  loss {last_loss:.3f}",
+                      f"search {search_frac:.2f}  psearch {psearch_frac:.2f}  "
+                      f"steps {len(X):5d}  loss {last_loss:.3f}",
                       flush=True)
     finally:
         if pool is not None:
