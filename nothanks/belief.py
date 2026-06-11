@@ -119,8 +119,18 @@ def heuristic_info_action(info: InfoSet, threshold: int = 0) -> str:
     return "take" if cost <= threshold else "pass"
 
 
+class _HeuristicPolicy:
+    """Callable (hence picklable) form of :func:`make_heuristic_policy`."""
+
+    def __init__(self, threshold: int):
+        self.threshold = threshold
+
+    def __call__(self, info: InfoSet) -> str:
+        return heuristic_info_action(info, self.threshold)
+
+
 def make_heuristic_policy(threshold: int = 0) -> InfoPolicy:
-    return lambda info: heuristic_info_action(info, threshold)
+    return _HeuristicPolicy(threshold)
 
 
 # --------------------------------------------------------------------------- #

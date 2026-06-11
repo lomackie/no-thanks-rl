@@ -50,16 +50,23 @@ Holdings are `;`-separated per seat, comma lists with ranges:
 just eval --chips 9,11,10 --cards "3-5,22;17;" --active 26 --pot 3 --to-move 0
 ```
 
-The default method is IS-MCTS with honest heuristic playouts. Train the info-set
-value net once for stronger, faster evals, then pass it back in:
+The default method is IS-MCTS with honest heuristic playouts. Train the
+info-set value net once (`models/` is local, not committed) for stronger,
+faster evals, then pass it back in:
 
 ```sh
-just train-info --out models/info_net_3p.npz
-just eval --net models/info_net_3p.npz --method net  --chips 9,11,10 \
+just train-info --out models/info_net_3p_v2.npz --search-frac-end 0.4 \
+    --deviation-frac 0.5 --iterations 80 --n-jobs 6   # the recommended recipe
+just eval --net models/info_net_3p_v2.npz --method net  --chips 9,11,10 \
     --cards "3-5,22;17;" --active 26 --pot 3          # instant one-ply eval
-just eval --net models/info_net_3p.npz --chips 9,11,10 \
+just eval --net models/info_net_3p_v2.npz --chips 9,11,10 \
     --cards "3-5,22;17;" --active 26 --pot 3          # IS-MCTS with the net leaf
 ```
+
+(`just play-cli` / `just play` pick up `models/info_net_{n}p.npz` for the
+player count automatically — preferring a `_v2` file — and fall back to
+heuristic playouts where no net exists. Worth training: 3p, 4p, 5p; for 6–7p
+the playout leaf measured stronger than any net we trained.)
 
 Every method parses the position into an *info set* (public knowledge only), so
 nothing here can peek at the nine removed cards.

@@ -4,7 +4,8 @@ Run with `just play` (or `uv run python -m nothanks.web`).
 Visit http://localhost:8000 in a browser.
 
 Sessions are in-memory only; each browser tab gets its own game. The AI is
-ISMCTSBot backed by the trained info-set net (models/info_net_3p.npz) when
+ISMCTSBot backed by the trained info-set net for the player count
+(``models/info_net_{n}p.npz``, preferring a ``_v2`` repair when present) when
 available, falling back to heuristic playouts.
 
 Two modes:
@@ -49,9 +50,9 @@ from .engine import (
 from .imperfect import InfoSet, info_from_state, legal_actions, pile_remaining, unseen
 from .ismcts import ISMCTSBot, LeafEvaluator, ismcts_evaluate, make_value_leaf
 
+from .beliefnet import default_net_path
+
 _HERE = pathlib.Path(__file__).parent
-_MODELS_DIR = _HERE.parent / "models"
-_DEFAULT_NET = _MODELS_DIR / "info_net_3p.npz"
 
 _executor = ThreadPoolExecutor(max_workers=4)
 
@@ -274,8 +275,7 @@ def api_new_game(req: NewGameRequest) -> dict:
     if not 0 <= human_seat < req.n_players:
         raise HTTPException(400, "human_seat out of range")
 
-    net_path = _DEFAULT_NET if req.n_players == 3 else None
-    leaf = _load_leaf(req.n_players, net_path)
+    leaf = _load_leaf(req.n_players, default_net_path(req.n_players))
     bots = _make_bots(req.n_players, human_seat, req.n_iter, leaf, seed)
 
     session_id = str(uuid.uuid4())
@@ -431,9 +431,9 @@ def api_advisor_new(req: AdvisorNewRequest) -> dict:
         deck=deck_fs,
         n_removed=req.n_removed,
     )
-    net_path = _DEFAULT_NET if req.n_players == 3 else None
     session = AdvisorSession(history=[info], advised_seat=req.advised_seat,
-                             n_iter=req.n_iter, leaf=_load_leaf(req.n_players, net_path))
+                             n_iter=req.n_iter,
+                             leaf=_load_leaf(req.n_players, default_net_path(req.n_players)))
     session_id = str(uuid.uuid4())
     _advisors[session_id] = session
     data = _advisor_to_dict(session)

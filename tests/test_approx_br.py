@@ -14,11 +14,14 @@ import random
 from nothanks import belief
 from nothanks.approx_br import (
     br_policy,
+    deviation_policy,
+    estimate_deviation_gain_mc,
     estimate_gain_mc,
     train_best_response,
 )
 from nothanks.beliefnet import new_belief_game
 from nothanks.imperfect import InfoSet, legal_actions
+from nothanks.ismcts import make_ismcts_policy, make_value_leaf
 
 DECK = [3, 4, 5, 6, 7]
 SETUP = dict(n_players=2, deck=DECK, n_removed=1, start_chips=2)
@@ -83,6 +86,44 @@ def test_estimate_gain_mc_matches_exact_average_over_openings():
     assert res["gain"] > 0.0
 
 
+def test_estimate_deviation_gain_mc_generalises_estimate_gain_mc():
+    # The one-ply entry point must be exactly the general estimator applied to
+    # the greedy(BR-net) joint policy — same games, same numbers.
+    policy = belief.make_heuristic_policy(0)
+    hero = 1
+    net = _train(policy, hero)
+    a = estimate_gain_mc(policy, net, hero, n_games=200, seed=77, **SETUP)
+    b = estimate_deviation_gain_mc(policy, br_policy(policy, net, hero), hero,
+                                   n_games=200, seed=77, **SETUP)
+    assert a == b
+
+
+def test_search_deviation_gain_is_sandwiched_and_positive_vs_heuristic():
+    # Roadmap step 17: deploy the hero as a *searcher* over its BR-trained leaf.
+    # The joint deviation is still a deterministic InfoPolicy, so the exact
+    # machinery grades it: its gain can never exceed the exact best response's
+    # (a theorem), and against the leaky heuristic it must be clearly positive.
+    info = new_belief_game(rng=random.Random(3), **SETUP)
+    policy = belief.make_heuristic_policy(0)
+    exact = belief.exploitability(info, policy)
+    hero = max(range(2), key=lambda h: exact["gain"][h])
+    assert exact["gain"][hero] > 1e-6
+
+    net = _train(policy, hero)
+    searcher = make_ismcts_policy(n_iter=400, evaluator=make_value_leaf(net),
+                                  c=1.5, seed=0)
+    deviate = deviation_policy(policy, searcher, hero)
+
+    a = deviate(info)
+    assert a in legal_actions(info)
+    assert deviate(info) == a  # deterministic, hence exactly evaluable
+
+    combined = belief.policy_value(info, deviate)
+    gain = exact["base"][hero] - combined[hero]
+    assert gain <= exact["gain"][hero] + 1e-9
+    assert gain > 0.0, (gain, exact["gain"][hero])
+
+
 def test_br_policy_is_deterministic_and_legal():
     policy = belief.make_heuristic_policy(0)
     net = _train(policy, hero=0, seed=1)
@@ -92,3 +133,51 @@ def test_br_policy_is_deterministic_and_legal():
     a = deviate(info)
     assert a in legal_actions(info)
     assert deviate(info) == a  # pure function of the info set
+
+
+def test_train_best_response_warm_start_runs_and_leaves_init_untouched():
+    import numpy as np
+
+    policy = belief.make_heuristic_policy(0)
+    base = _train(policy, hero=0, seed=1)
+    w1_before = base.W1.copy()
+    net = train_best_response(policy, 0, iterations=1, games_per_iter=4,
+                              epochs_per_iter=1, init_net=base, **SETUP)
+    assert net is not base and net.in_dim == base.in_dim
+    assert np.array_equal(base.W1, w1_before)  # init copied, not mutated
+    assert not np.array_equal(net.W1, w1_before)  # training actually moved it
+
+
+def test_policies_are_picklable_for_the_worker_pools():
+    # The n_jobs pools ship frozen policies to worker processes, so every
+    # factory must return a picklable object (closures would not be).
+    import pickle
+
+    policy = belief.make_heuristic_policy(0)
+    net = _train(policy, hero=0, seed=1)
+    searcher = make_ismcts_policy(n_iter=8, evaluator=make_value_leaf(net), c=1.5)
+    joint = deviation_policy(policy, searcher, hero=0)
+
+    info = new_belief_game(rng=random.Random(8), **SETUP)
+    for pol in (policy, searcher, joint, br_policy(policy, net, hero=0)):
+        clone = pickle.loads(pickle.dumps(pol))
+        assert clone(info) == pol(info)
+
+
+def test_estimate_gain_mc_n_jobs_matches_sequential():
+    # Per-game seeds are seed+i either way, so the pool must reproduce the
+    # sequential numbers exactly.
+    policy = belief.make_heuristic_policy(0)
+    net = _train(policy, hero=1)
+    a = estimate_gain_mc(policy, net, 1, n_games=60, seed=9, **SETUP)
+    b = estimate_gain_mc(policy, net, 1, n_games=60, seed=9, n_jobs=2, **SETUP)
+    assert a == b
+
+
+def test_train_best_response_n_jobs_is_deterministic():
+    policy = belief.make_heuristic_policy(0)
+    kwargs = dict(iterations=2, games_per_iter=6, epochs_per_iter=1, seed=4, **SETUP)
+    a = train_best_response(policy, hero=0, n_jobs=2, **kwargs)
+    b = train_best_response(policy, hero=0, n_jobs=3, **kwargs)
+    import numpy as np
+    assert np.array_equal(a.W1, b.W1) and np.array_equal(a.W2, b.W2)

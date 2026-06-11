@@ -23,12 +23,12 @@ with ``--net``), ``net`` (one-ply lookahead on a trained info net, instant), and
 kept for comparison).
 
 When methods disagree: trust ``ismcts`` by default (it is by far the strongest
-player in fair bot-vs-bot grading), but on close take/pass calls over an
-isolated or gapped high card with a decent pot, treat net-based EVs with
-caution — the trained net systematically overprices those takes, and the search
-inherits the bias when the take arm is visit-starved (read the visit counts).
-``pimc``'s EVs are the *rollout policy's*, biased toward heuristic play. See
-CLAUDE.md roadmap step 12 for the adjudication behind this.
+player in fair bot-vs-bot grading). The historical bias on isolated/gapped
+high cards (the original net overpriced those takes and the search inherited
+it through visit starvation — CLAUDE.md step 12) is repaired in the ``_v2``
+nets (step 16), but on close calls it is still worth reading the visit counts
+and preferring playout evidence over one-ply EVs. ``pimc``'s EVs are the
+*rollout policy's*, biased toward heuristic play.
 
 ``train`` trains the honest info-set net (:func:`nothanks.beliefnet.train_info`)
 and saves it: train once, analyse many times. ``play`` is an interactive
@@ -192,9 +192,16 @@ def cmd_train(args) -> None:
         games_per_iter=args.games_per_iter,
         heur_frac_start=1.0,
         heur_frac_end=args.heur_frac_end,
+        eps_end=args.eps_end,
+        search_frac_start=0.0,
+        search_frac_end=args.search_frac_end,
+        search_iters=args.search_iters,
+        search_c=args.search_c,
+        deviation_frac=args.deviation_frac,
         target_refresh=args.target_refresh,
         hidden=args.hidden,
         n_removed=args.n_removed,
+        n_jobs=args.n_jobs,
         seed=args.seed,
         log=True,
     )
@@ -243,9 +250,15 @@ def cmd_play(args) -> None:
     if not 0 <= human < n:
         raise ValueError(f"--seat must be in 0..{n - 1}")
 
+    net_path = args.net
+    if net_path is None:  # default: the saved net for this player count, if any
+        from .beliefnet import default_net_path
+
+        found = default_net_path(n)
+        net_path = str(found) if found else ""
     leaf = None
-    if args.net:
-        net = _load_info_net(args.net)
+    if net_path:
+        net = _load_info_net(net_path)
         if net.n_players != n:
             raise SystemExit(f"net is for {net.n_players} players, game has {n}")
         leaf = make_value_leaf(net)
@@ -329,9 +342,26 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--games-per-iter", type=int, default=80)
     t.add_argument("--heur-frac-end", type=float, default=0.25,
                    help="curriculum endpoint (1.0 = heuristic-only data)")
+    t.add_argument("--eps-end", type=float, default=0.05,
+                   help="exploration endpoint; keep ~0.15 with a strong "
+                        "--search-frac-end (the step-16 coverage lesson)")
+    t.add_argument("--search-frac-end", type=float, default=0.0,
+                   help="fraction of games played by IS-MCTS (current net as "
+                        "leaf) by the final iteration, annealed up from 0 — "
+                        "the expert-iteration leg (slow; ~1s per such game)")
+    t.add_argument("--search-iters", type=int, default=200,
+                   help="IS-MCTS iterations per move for search-played games")
+    t.add_argument("--search-c", type=float, default=30.0,
+                   help="IS-MCTS exploration constant for search-played games")
+    t.add_argument("--deviation-frac", type=float, default=0.0,
+                   help="fraction of games with one exploring deviation "
+                        "(coverage without inflating the value scale)")
     t.add_argument("--target-refresh", type=int, default=5)
     t.add_argument("--hidden", type=int, default=64)
     t.add_argument("--n-removed", type=int, default=9)
+    t.add_argument("--n-jobs", type=int, default=1,
+                   help="worker processes for game generation (1 = in-process; "
+                        ">1 changes the data RNG stream but stays deterministic)")
     t.add_argument("--seed", type=int, default=0)
     t.add_argument("--grade", type=int, default=500,
                    help="games for the post-train grading run (0 = skip)")
@@ -340,8 +370,10 @@ def build_parser() -> argparse.ArgumentParser:
     g = sub.add_parser("play", help="interactive terminal game vs the IS-MCTS bot")
     g.add_argument("--n-players", type=int, default=3)
     g.add_argument("--seat", type=int, default=0, help="your seat (default 0)")
-    g.add_argument("--net", default="models/info_net_3p.npz",
-                   help="info-set net for the search leaf ('' = heuristic playouts)")
+    g.add_argument("--net", default=None,
+                   help="info-set net for the search leaf (default: the saved "
+                        "models/info_net_{n}p net for the player count, falling "
+                        "back to heuristic playouts; '' forces playouts)")
     g.add_argument("--n-iter", type=int, default=400, help="IS-MCTS iterations per move")
     g.add_argument("--c", type=float, default=30.0, help="IS-MCTS exploration constant")
     g.add_argument("--n-removed", type=int, default=9)

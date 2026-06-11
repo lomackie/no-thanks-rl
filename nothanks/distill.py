@@ -178,8 +178,9 @@ def main(argv=None) -> None:
         description="distill the bot's policy into threshold rules")
     p.add_argument("--policy", choices=("mcts", "net"), default="mcts",
                    help="mcts = IS-MCTS bot (strongest, slower); net = one-ply info net")
-    p.add_argument("--net", default="models/info_net_3p.npz",
-                   help="path to the saved info-set net (.npz)")
+    p.add_argument("--net", default=None,
+                   help="path to the saved info-set net (.npz); default: the "
+                        "models/info_net_3p convention (preferring _v2)")
     p.add_argument("--games", type=int, default=0,
                    help="self-play games to sample (default: 120 mcts / 600 net)")
     p.add_argument("--n-iter", type=int, default=200, help="IS-MCTS iterations")
@@ -190,7 +191,15 @@ def main(argv=None) -> None:
 
     from .valuefn import ValueNet
 
-    net = ValueNet.load(args.net)
+    net_path = args.net
+    if net_path is None:
+        from .beliefnet import default_net_path
+
+        found = default_net_path(3)
+        if found is None:
+            raise SystemExit("no saved 3p info net found; pass --net")
+        net_path = str(found)
+    net = ValueNet.load(net_path)
     if args.policy == "net":
         from .beliefnet import make_greedy_info_policy
 

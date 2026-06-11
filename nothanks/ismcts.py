@@ -104,6 +104,17 @@ def heuristic_rollout(info: InfoSet, rng: random.Random, threshold: int = 0) -> 
     return final_scores(info)
 
 
+class _ValueLeaf:
+    """Callable (hence picklable) form of :func:`make_value_leaf`."""
+
+    def __init__(self, net):
+        self.net = net
+
+    def __call__(self, info: InfoSet, _rng: random.Random) -> tuple[float, ...]:
+        pred = self.net.forward(info_features(info)[None, :])[0]
+        return tuple(float(x) for x in np.roll(pred, info.to_move))
+
+
 def make_value_leaf(net) -> LeafEvaluator:
     """A :data:`LeafEvaluator` from an **info-set** value net (one forward pass).
 
@@ -113,13 +124,10 @@ def make_value_leaf(net) -> LeafEvaluator:
     frame; rolling by ``to_move`` converts to the absolute frame the backup sums.
     This is what scales the search to the full deck: a forward pass replaces a
     whole heuristic playout, and the net's value is a far stronger leaf estimate.
+    The returned object is picklable, so it can cross process boundaries (the
+    ``n_jobs`` training pools).
     """
-
-    def leaf(info: InfoSet, _rng: random.Random) -> tuple[float, ...]:
-        pred = net.forward(info_features(info)[None, :])[0]
-        return tuple(float(x) for x in np.roll(pred, info.to_move))
-
-    return leaf
+    return _ValueLeaf(net)
 
 
 @dataclass
@@ -273,6 +281,24 @@ def _info_key(info: InfoSet) -> str:
             f"|{deck}|{info.n_removed}")
 
 
+class _ISMCTSPolicy:
+    """Callable (hence picklable) form of :func:`make_ismcts_policy`."""
+
+    def __init__(self, n_iter: int, evaluator: LeafEvaluator, c: float, seed: int):
+        self.n_iter = n_iter
+        self.evaluator = evaluator
+        self.c = c
+        self.seed = seed
+
+    def __call__(self, info: InfoSet) -> str:
+        acts = legal_actions(info)
+        if len(acts) == 1:
+            return acts[0]
+        rng = random.Random(f"{self.seed}|{_info_key(info)}")
+        return ismcts_evaluate(info, self.n_iter, self.evaluator, self.c,
+                               rng)["best_action"]
+
+
 def make_ismcts_policy(
     n_iter: int = 800,
     evaluator: LeafEvaluator | None = None,
@@ -286,18 +312,11 @@ def make_ismcts_policy(
     info set. We get that by seeding the search rng from ``seed`` and a canonical
     key of the info set (:func:`_info_key`), so the same info set always yields the
     same move — making the IS-MCTS player gradeable against the belief-correct best
-    response, the headline measurement this module targets.
+    response, the headline measurement this module targets. Picklable (given a
+    picklable ``evaluator``), so it can be a frozen opponent inside the ``n_jobs``
+    training pools.
     """
-    evaluator = evaluator or heuristic_rollout
-
-    def policy(info: InfoSet) -> str:
-        acts = legal_actions(info)
-        if len(acts) == 1:
-            return acts[0]
-        rng = random.Random(f"{seed}|{_info_key(info)}")
-        return ismcts_evaluate(info, n_iter, evaluator, c, rng)["best_action"]
-
-    return policy
+    return _ISMCTSPolicy(n_iter, evaluator or heuristic_rollout, c, seed)
 
 
 class ISMCTSBot:
